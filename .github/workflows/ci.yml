@@ -1,0 +1,161 @@
+name: CI
+
+# This plugin currently lives inside the medusa monorepo and is built and tested
+# by that repository's workflow. This file is the one it will use once it is
+# extracted into a repository of its own, and is kept in step with the checks that
+# run today so the extraction is a move rather than a rewrite.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm exec medusa lint src
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+
+      - name: Test
+        run: pnpm exec vitest run
+
+      # Compiles src to .medusa/server. This is the step that catches a broken
+      # export map, which no other check can see.
+      - name: Build
+        run: pnpm exec medusa plugin:build
+
+  migrations-up-to-date:
+    name: Migrations match the models
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medusa_usage_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # fetch-depth: 0 because the snapshot check below diffs across the pushed
+      # commit range, which a shallow clone cannot see.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # A model change without a regenerated migration is invisible until someone
+      # deploys and the table is missing a column. Generating here and failing on a
+      # dirty tree makes that a review-time error instead.
+      - name: Generate migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: medusa_usage_ci
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/medusa_usage_ci
+        run: pnpm exec medusa plugin:db:generate
+
+      # `git status --porcelain` rather than `git diff`, because a newly generated
+      # migration is UNTRACKED and `git diff` cannot see it.
+      - name: Fail if a migration is missing
+        run: |
+          if [ -n "$(git status --porcelain src/modules)" ]; then
+            echo "Models changed without a regenerated migration."
+            echo "Run 'pnpm exec medusa plugin:db:generate' and commit the result."
+            git status --porcelain src/modules
+            git diff -- src/modules
+            exit 1
+          fi
+
+      # The hole the step above cannot see, and the reason there are two guards.
+      #
+      # `plugin:db:generate` diffs the models against the SNAPSHOT, not against the
+      # database. So a commit that carries the updated snapshot but never `git add`ed
+      # the generated `Migration*.ts` is completely silent above: the tree is clean,
+      # the migration file is simply absent, and regenerating reports "No migration
+      # created" because the snapshot already accounts for the schema. The column is
+      # then missing from the table on deploy.
+      #
+      # `--diff-filter=A` is load-bearing - a modified migration is not a new one.
+      # The skip paths matter too: a guard that reddens CI on an unrelated force
+      # push gets disabled by the third person it inconveniences.
+      - name: Fail if the snapshot moved without a new migration
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base commit (new branch, or a manual run) - skipping."
+            exit 0
+          fi
+          if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then
+            echo "Base commit $BASE_SHA is not in this repository (likely a force push) - skipping."
+            exit 0
+          fi
+
+          snapshot_changed=$(git diff --name-only "$BASE_SHA" HEAD -- src/modules \
+            | { grep -E '/\.snapshot-.*\.json$' || true; })
+          if [ -z "$snapshot_changed" ]; then
+            echo "The migration snapshot did not change in this range - nothing to check."
+            exit 0
+          fi
+
+          migration_added=$(git diff --name-only --diff-filter=A "$BASE_SHA" HEAD -- src/modules \
+            | { grep -E '/Migration[0-9]+\.ts$' || true; })
+          if [ -n "$migration_added" ]; then
+            echo "Snapshot moved and a migration was added:"
+            echo "$migration_added" | sed 's/^/  /'
+            exit 0
+          fi
+
+          echo "The migration snapshot changed but NO migration file was added in this range."
+          echo "This is almost always a forgotten 'git add' on a newly generated migration."
+          echo "Fix: commit the generated Migration*.ts alongside the snapshot."
+          echo
+          echo "Snapshot files changed in this range:"
+          echo "$snapshot_changed" | sed 's/^/  /'
+          exit 1
