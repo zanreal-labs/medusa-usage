@@ -1,5 +1,7 @@
 import { MedusaError } from "@medusajs/framework/utils";
 import { AbstractUsageSinkProviderService } from "../../lib/sink/abstract-sink";
+import type { ManagerLike, RawSqlRunner } from "../../lib/sql/raw";
+import { dateOrNull, knexFor, rowsOf } from "../../lib/sql/raw";
 import type {
   StoredUsageEvent,
   UsageAggregateQuery,
@@ -56,28 +58,6 @@ const RAW_QUANTITY_PRECISION = 20;
 
 /** Hard ceiling on one page, whatever a caller asks for. */
 const MAX_PAGE_SIZE = 1000;
-
-/** The minimum of knex this provider uses. Typed structurally rather than imported:
- * knex is a transitive dependency of MikroORM here, not a declared one. */
-interface RawSqlRunner {
-  raw: <TRow>(
-    sql: string,
-    bindings: readonly unknown[],
-  ) => Promise<{ rows?: TRow[] } | TRow[] | undefined>;
-}
-
-interface ManagerLike {
-  getKnex?: () => RawSqlRunner;
-  getConnection?: () => { getKnex?: () => RawSqlRunner };
-}
-
-/** knex's `raw` resolves to the driver's result (`{ rows }` on pg), typed loosely. */
-const rowsOf = <TRow>(result: { rows?: TRow[] } | TRow[] | undefined): TRow[] => {
-  if (Array.isArray(result)) {
-    return result;
-  }
-  return result?.rows ?? [];
-};
 
 interface AggregateRow {
   total: string;
@@ -233,28 +213,11 @@ export default class PostgresUsageSinkService extends AbstractUsageSinkProviderS
     return { bindings, sql: clauses.join(" and ") };
   }
 
-  /**
-   * The module's own database connection.
-   *
-   * Resolved lazily rather than in the constructor: providers are loaded into the
-   * module container alongside the connection, and reaching for it at construction
-   * time would make this sink depend on the order two loaders happen to run in.
-   */
+  /** The module's own database connection. Resolved on use, not at construction. */
   private sql(): RawSqlRunner {
-    const { manager } = this.cradle;
-    const knex = manager?.getKnex?.() ?? manager?.getConnection?.()?.getKnex?.();
-    if (!knex) {
-      throw new MedusaError(
-        MedusaError.Types.UNEXPECTED_STATE,
-        "medusa-usage: the Postgres usage sink has no database connection. It reads the module's own connection from the container, so this means the module was constructed without one.",
-      );
-    }
-    return knex;
+    return knexFor(this.cradle.manager, "the Postgres usage sink");
   }
 }
-
-const dateOrNull = (value: Date | string | null): Date | null =>
-  value === null ? null : new Date(value);
 
 const toStoredEvent = (row: EventRow): StoredUsageEvent => ({
   key: row.id,

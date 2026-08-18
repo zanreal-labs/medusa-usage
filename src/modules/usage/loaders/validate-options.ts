@@ -32,6 +32,20 @@ export default async function validateUsageOptions({
         : ", writing on every call."),
   );
 
+  logger?.info(
+    resolved.billing
+      ? `[medusa-usage] rating ${resolved.billing.rates.length} meter(s) in ${resolved.billing.currency}: ` +
+          `${resolved.billing.rates
+            .map(
+              (rate) =>
+                `${rate.meter} at ${rate.unitAmount}/${rate.perUnits}` +
+                (rate.includedUnits > 0 ? ` after ${rate.includedUnits} included` : ""),
+            )
+            .join(", ")}. ` +
+          `A period may be closed ${resolved.billing.closeDelayMs}ms after it ends.`
+      : "[medusa-usage] no `billing` rates are configured, so usage is metered but not rated. Periods cannot be closed until a rate card exists.",
+  );
+
   if (resolved.flushMode === "buffered") {
     logger?.debug?.(
       `[medusa-usage] up to ${resolved.maxBufferedEvents} events may be held in memory before ingestion applies back pressure. ` +

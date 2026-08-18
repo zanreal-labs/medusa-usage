@@ -73,3 +73,29 @@ describe("resolveUsageOptions", () => {
     expect(() => resolveUsageOptions({ sink: "  " })).toThrow(/`sink`/u);
   });
 });
+
+describe("resolveUsageOptions: billing", () => {
+  it("is null when the host only wants metering", () => {
+    expect(resolveUsageOptions({}).billing).toBeNull();
+  });
+
+  it("carries the rate card through, with its defaults applied", () => {
+    const resolved = resolveUsageOptions({
+      billing: { currency: "PLN", rates: [{ meter: "api_request", unitAmount: 12 }] },
+    });
+
+    expect(resolved.billing).toMatchObject({ closeDelayMs: 0, currency: "PLN" });
+    expect(resolved.billing?.rates[0]).toEqual({
+      includedUnits: 0,
+      meter: "api_request",
+      perUnits: 1,
+      unitAmount: 12,
+    });
+  });
+
+  it("fails the boot on a rate card that cannot mean what it says", () => {
+    expect(() =>
+      resolveUsageOptions({ billing: { currency: "", rates: [] } as never }),
+    ).toThrow(/`billing.currency` is required/u);
+  });
+});

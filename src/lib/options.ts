@@ -1,4 +1,6 @@
 import { MedusaError } from "@medusajs/framework/utils";
+import type { RateCard, UsageBillingOptions } from "./billing/rates";
+import { resolveRateCard } from "./billing/rates";
 
 /**
  * Options accepted by the usage plugin.
@@ -67,10 +69,24 @@ export interface UsagePluginOptions {
   maxBufferedEvents?: number;
   /** Most events one `recordUsage` call may carry. Bounds a single request. */
   maxEventsPerCall?: number;
+  /**
+   * What usage is worth, and how long after a period ends it may be closed.
+   *
+   * Omit it and the plugin meters without rating anything, which is exactly what
+   * it did before periods existed: `record`, `aggregate` and `listEvents` are
+   * unaffected, and only closing a period refuses. There is no default rate card,
+   * because a period rated at a guessed price is worse than a period that cannot
+   * be closed until someone says what usage costs.
+   *
+   * See `./billing/rates.ts` for the shape and for what is deliberately not in it.
+   */
+  billing?: UsageBillingOptions;
 }
 
 /** Options after defaults and validation. Every field is present. */
 export interface ResolvedUsageOptions {
+  /** The rate card, or null when the host configured none. */
+  billing: RateCard | null;
   providers: UsageSinkProviderConfig[];
   sink: string | null;
   flushMode: "buffered" | "immediate";
@@ -179,6 +195,7 @@ export function resolveUsageOptions(options?: Partial<UsagePluginOptions>): Reso
 
   return {
     batchSize,
+    billing: resolveRateCard(options?.billing),
     flushIntervalMs: positiveInteger(
       options?.flushIntervalMs,
       "flushIntervalMs",

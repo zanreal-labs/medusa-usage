@@ -15,6 +15,10 @@ import type UsageModuleService from "../../../modules/usage/service";
  *
  * Note "this process's buffer": in a deployment with several instances, this
  * answers for whichever one served the request.
+ *
+ * `rates` is the configured rate card, or null when the plugin only meters. A
+ * period cannot be closed while it is null, and this is where to see that before
+ * a billing run discovers it.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const usage = req.scope.resolve<UsageModuleService>(USAGE_MODULE);
@@ -28,6 +32,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
     last_flush_at: status.lastFlushAt,
     last_flush_error: status.lastFlushError,
     oldest_buffered_ms: status.oldestBufferedMs,
+    rates: status.rates,
     sink: status.sink,
     sinks: status.sinks,
   });
