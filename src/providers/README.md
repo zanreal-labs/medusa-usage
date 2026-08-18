@@ -61,5 +61,19 @@ The `id` is yours, not the provider's. It is what the `sink` option selects on, 
 appears in every snapshot, and what a log line names - so two instances of the same
 provider package are two sinks with two ids, and they do not collide.
 
+## A worked one
+
+[`@zanreal/medusa-usage-tinybird`](https://github.com/zanreal-labs/medusa-usage-tinybird)
+is a sink written against this interface from outside the package. It is the
+useful example for the hard part: a column store has no primary key, so "at most
+one row per key" is not something the storage gives, and the package sets out
+which half of the guarantee it rebuilds in the read path, which half is eventual,
+and what that means for a caller reading an aggregate moments after a retry.
+
+Note what it needs from here: the abstract class, the types, and the plugin's own
+`canonicalJson` so that a dimension in a filter is encoded exactly as the same
+dimension inside a deduplication key. Those imports are why this package emits
+declarations.
+
 Learn more about module providers in
 [the Medusa documentation](https://docs.medusajs.com/learn/fundamentals/plugins/create).

@@ -358,6 +358,12 @@ delete, and none should be added.
 `src/providers/README.md` has a worked example of writing one. The built-in
 Postgres sink is the reference implementation, and is about two hundred lines.
 
+`@zanreal/medusa-usage-tinybird` is the second one, in a package of its own so
+that nothing in here has to know what Tinybird is. It is worth reading if you are
+writing a third: a column store gives none of the guarantees a primary key does,
+and the package documents exactly which of them it rebuilds in the read path and
+which stay eventual.
+
 ## Options
 
 ```ts
@@ -464,8 +470,6 @@ pricing model rather than guessed at:
   currency. Today you get a count and price it yourself.
 - **Limits and quotas.** Refusing or throttling a request once a subject has passed
   an allowance, which needs a fast read path that the aggregate query is not.
-- **A Tinybird sink.** The interface was built with one in mind and carries none of
-  its assumptions; it is a separate package, not a branch in this one.
 - **An admin UI.** A screen that only rendered today's endpoints would need
   redesigning the moment periods and rating exist.
 - **Rollups.** Aggregating from raw events stays honest indefinitely, but not fast
