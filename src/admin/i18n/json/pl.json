@@ -1,0 +1,225 @@
+{
+  "usage": {
+    "heading": "Zużycie",
+    "description": "Mierzone zużycie i okresy rozliczeniowe wycenione na jego podstawie. Okna są półotwarte i liczone w UTC: obejmują wszystko od pierwszej daty do drugiej, ale bez niej samej.",
+    "common": {
+      "amount": "Kwota",
+      "events": "Zdarzenia",
+      "meter": "Licznik",
+      "quantity": "Ilość",
+      "readingTheLog": "Odczyt dziennika",
+      "refresh": "Odśwież",
+      "requestFailed": "Żądanie nie powiodło się i nie podało przyczyny.",
+      "subject": "Podmiot",
+      "unavailable": "niedostępne"
+    },
+    "filters": {
+      "apply": "Zastosuj",
+      "from": "Od",
+      "reset_one": "Ostatni {{count}} dzień",
+      "reset_few": "Ostatnie {{count}} dni",
+      "reset_many": "Ostatnie {{count}} dni",
+      "reset_other": "Ostatnie {{count}} dnia",
+      "subject": "Podmiot",
+      "subjectPlaceholder": "Wszystkie podmioty",
+      "to": "Do, bez tego dnia"
+    },
+    "window": {
+      "bothRequired": "Obie daty są wymagane, w formacie RRRR-MM-DD.",
+      "endsBeforeStart": "Okno kończy się przed swoim początkiem.",
+      "noWidth": "To okno ma zerową szerokość, więc zawsze dałoby zero. Pole `Do` jest wyłączające, więc musi wskazywać dzień PO ostatnim, który chcesz objąć."
+    },
+    "ingestion": {
+      "title": "Przyjmowanie zdarzeń",
+      "description": "Co ta instancja wtyczki robi ze zdarzeniami, które do niej trafiają.",
+      "fields": {
+        "batchSize": "Wielkość partii",
+        "buffered": "W buforze",
+        "flushInterval": "Odstęp między zapisami",
+        "flushMode": "Tryb zapisu",
+        "lastFlush": "Ostatni zapis",
+        "oldestBuffered": "Najstarsze w buforze",
+        "registeredSinks": "Zarejestrowane ujścia",
+        "sink": "Ujście"
+      },
+      "rates": {
+        "included": "W cenie",
+        "price": "Cena",
+        "free": "{{units}} w cenie",
+        "perUnit_one": " za jednostkę",
+        "perUnit_few": " za {{units}} jednostki",
+        "perUnit_many": " za {{units}} jednostek",
+        "perUnit_other": " za {{units}} jednostki",
+        "emptyTitle": "Cennik nie wycenia żadnego licznika",
+        "emptyBody": "Cennik bez liczników wycenia każdy okres na zero. To poprawna odpowiedź i zaskakująca faktura, więc warto sprawdzić, czy o to chodziło."
+      }
+    },
+    "meters": {
+      "title": "Liczniki",
+      "descriptionAll": "Ile zużyły razem wszystkie podmioty w wybranym oknie, licznik po liczniku.",
+      "descriptionSubject": "Ile zużył podmiot \"{{subject}}\" w wybranym oknie, licznik po liczniku.",
+      "add": "Dodaj",
+      "addPlaceholder": "Nazwa kolejnego licznika",
+      "columns": {
+        "digest": "Skrót",
+        "first": "Pierwsze",
+        "last": "Ostatnie"
+      },
+      "noneInWindow": "brak w tym oknie",
+      "emptyTitle": "Nie ma o jaki licznik zapytać",
+      "emptyBody": "Ta instalacja nie ma cennika, więc wtyczka nie wie, jakie nazwy liczników istnieją - zapisuje to, co przyśle producent zdarzeń. Wpisz nazwę licznika powyżej, aby zapytać dziennik, co ma zapisane pod tą nazwą."
+    },
+    "periods": {
+      "title": "Okresy rozliczeniowe",
+      "descriptionAll": "Od najnowszego okna. Okres jest zamknięty wtedy i tylko wtedy, gdy ma utrwalony wynik. Daty powyżej nie filtrują tej listy.",
+      "descriptionSubject": "Okresy podmiotu \"{{subject}}\", od najnowszego okna. Okres jest zamknięty wtedy i tylko wtedy, gdy ma utrwalony wynik. Daty powyżej nie filtrują tej listy.",
+      "status": {
+        "any": "Dowolny status",
+        "closed": "Zamknięte",
+        "open": "Otwarte, niezafakturowane"
+      },
+      "columns": {
+        "closable": "Możliwość zamknięcia",
+        "status": "Status",
+        "window": "Okno"
+      },
+      "windowRange": "{{from}} do {{to}}",
+      "badge": {
+        "closed": "Zamknięty",
+        "open": "Otwarty"
+      },
+      "statusUnavailable": "Status niedostępny",
+      "shortReason": {
+        "closable": "Gotowy do zamknięcia",
+        "closed": "Już zamknięty",
+        "noRateCard": "Brak cennika",
+        "tooEarly": "Wciąż nalicza",
+        "unknown": "-"
+      },
+      "open": "Otwórz",
+      "truncated_one": "Pokazano pierwszy okres, tyle ile ten panel pobiera. Niemal na pewno jest ich więcej: zawęź po podmiocie albo po statusie, aby do nich dotrzeć.",
+      "truncated_few": "Pokazano pierwsze {{count}} okresy, tyle ile ten panel pobiera. Niemal na pewno jest ich więcej: zawęź po podmiocie albo po statusie, aby do nich dotrzeć.",
+      "truncated_many": "Pokazano pierwszych {{count}} okresów, tyle ile ten panel pobiera. Niemal na pewno jest ich więcej: zawęź po podmiocie albo po statusie, aby do nich dotrzeć.",
+      "truncated_other": "Pokazano pierwszych {{count}} okresów, tyle ile ten panel pobiera. Niemal na pewno jest ich więcej: zawęź po podmiocie albo po statusie, aby do nich dotrzeć.",
+      "emptyTitle": "Nie otwarto żadnego okresu",
+      "emptyBody": "To oczekiwany stan na nowej instalacji i nie jest usterką. Wtyczka nie tworzy okresów, bo tylko aplikacja wie, czym jest tutaj cykl rozliczeniowy - czy to miesiąc kalendarzowy, trzydzieści dni od dnia rejestracji, czy jeszcze coś innego. Otwórz okres przez `POST /admin/usage/periods`, z własnego zadania, a pojawi się na tej liście.",
+      "emptyFilteredTitle": "Żaden okres nie pasuje do tych filtrów",
+      "emptyFilteredBody": "Wyczyść podmiot albo ustaw status z powrotem na dowolny, aby sprawdzić, czy istnieją okresy niepasujące do filtrów, czy nie ma ich wcale."
+    },
+    "events": {
+      "title": "Zdarzenia",
+      "descriptionAll": "{{meter}}, wszystkie podmioty, od najstarszych, od {{from}} do {{to}}.",
+      "descriptionAllNoWindow": "{{meter}}, wszystkie podmioty, od najstarszych.",
+      "descriptionSubject": "{{meter}} dla podmiotu {{subject}}, od najstarszych, od {{from}} do {{to}}.",
+      "descriptionSubjectNoWindow": "{{meter}} dla podmiotu {{subject}}, od najstarszych.",
+      "columns": {
+        "key": "Klucz",
+        "occurred": "Wystąpiło",
+        "source": "Źródło"
+      },
+      "emptyTitle": "Brak zdarzeń w tym oknie",
+      "emptyBody": "Na tym liczniku nie zapisano nic w oknie podanym powyżej. Licznik, do którego nigdy nie zapisano, i licznik, którego zużycie wypada poza oknem, wyglądają stąd tak samo, więc najpierw spróbuj poszerzyć okno.",
+      "shownAll_one": "Pokazano {{shown}} zdarzenie. To wszystkie.",
+      "shownAll_few": "Pokazano {{shown}} zdarzenia. To wszystkie.",
+      "shownAll_many": "Pokazano {{shown}} zdarzeń. To wszystkie.",
+      "shownAll_other": "Pokazano {{shown}} zdarzeń. To wszystkie.",
+      "shownMore_one": "Pokazano {{shown}} zdarzenie. Jest ich więcej.",
+      "shownMore_few": "Pokazano {{shown}} zdarzenia. Jest ich więcej.",
+      "shownMore_many": "Pokazano {{shown}} zdarzeń. Jest ich więcej.",
+      "shownMore_other": "Pokazano {{shown}} zdarzeń. Jest ich więcej.",
+      "loadMore": "Wczytaj więcej",
+      "tryAgain": "Spróbuj ponownie"
+    },
+    "period": {
+      "title": "Okres rozliczeniowy",
+      "fields": {
+        "opened": "Otwarty",
+        "windowEnds": "Koniec okna, bez tej chwili",
+        "windowStarts": "Początek okna"
+      },
+      "statusUnknown": "Nie wiadomo, czy ten okres można zamknąć: odczyt statusu wtyczki nie powiódł się. {{error}}",
+      "close": "Zamknij okres",
+      "verify": "Zweryfikuj",
+      "confirm": {
+        "cancel": "Anuluj",
+        "confirm": "Zamknij okres",
+        "description": "Wyceni to zużycie podmiotu {{subject}} od {{from}} do {{to}} według bieżącego cennika i utrwali wynik. Operację można bezpiecznie powtórzyć i nie zafakturuje tego samego okresu dwa razy, ale utrwalony wynik już się potem nie zmieni.",
+        "title": "Zamknąć ten okres?"
+      },
+      "noResultTitle": "Brak utrwalonego wyniku",
+      "noResultBody": "Ten okres jest otwarty, czyli nie został zafakturowany. To co innego niż wynik o wartości zero: otwarty okres mówi, żeby jeszcze go nie fakturować, a zamknięty i wart zero mówi, że dowodnie wyszło z niego zero.",
+      "result": {
+        "heading": "Utrwalony wynik",
+        "chargedFor": "Płatna ilość",
+        "closed": "Zamknięty",
+        "digest": "Skrót",
+        "eventsBehind": "Zdarzenia za tym wynikiem",
+        "ratedFromSink": "Wycenione z ujścia",
+        "total": "Razem"
+      },
+      "verification": {
+        "heading": "Wyliczone ponownie z dziennika",
+        "amountDelta": "Różnica kwoty",
+        "billed": "Zafakturowano",
+        "now": "Teraz",
+        "quantityDelta": "Różnica ilości"
+      },
+      "accrued": {
+        "heading": "Naliczone dotąd, w granicach samego okresu"
+      }
+    },
+    "verdicts": {
+      "ingestion": {
+        "instance": "Te liczby dotyczą instancji, która obsłużyła to żądanie, a nie całego wdrożenia.",
+        "flushFailedHeadline": "Ostatni zapis nie powiódł się",
+        "flushFailed_one": "Ujście \"{{sink}}\" odpowiedziało: {{error}}. W buforze czeka {{count}} zdarzenie. Dopóki zapis się nie powiedzie, zużycie jest wyłącznie w pamięci.",
+        "flushFailed_few": "Ujście \"{{sink}}\" odpowiedziało: {{error}}. W buforze czekają {{count}} zdarzenia. Dopóki zapis się nie powiedzie, zużycie jest wyłącznie w pamięci.",
+        "flushFailed_many": "Ujście \"{{sink}}\" odpowiedziało: {{error}}. W buforze czeka {{count}} zdarzeń. Dopóki zapis się nie powiedzie, zużycie jest wyłącznie w pamięci.",
+        "flushFailed_other": "Ujście \"{{sink}}\" odpowiedziało: {{error}}. W buforze czeka {{count}} zdarzeń. Dopóki zapis się nie powiedzie, zużycie jest wyłącznie w pamięci.",
+        "immediateHeadline": "Zapisuje każde zdarzenie od razu",
+        "immediateDetail": "Każde zdarzenie jest zapisywane do ujścia \"{{sink}}\" w chwili nadejścia, więc nic nie trafia do bufora i nie ma zapisu, który mógłby zostawać w tyle.",
+        "neverFlushedHeadline": "Buforuje, nic jeszcze nie zapisano",
+        "neverFlushed_one": "W buforze czeka {{count}} zdarzenie, najstarsze od {{oldest}}, i nic nie zostało jeszcze zapisane do ujścia \"{{sink}}\". Zapis następuje co {{interval}} albo wcześniej, po {{batchSize}} zdarzeniach. $t(usage.verdicts.ingestion.instance)",
+        "neverFlushed_few": "W buforze czekają {{count}} zdarzenia, najstarsze od {{oldest}}, i nic nie zostało jeszcze zapisane do ujścia \"{{sink}}\". Zapis następuje co {{interval}} albo wcześniej, po {{batchSize}} zdarzeniach. $t(usage.verdicts.ingestion.instance)",
+        "neverFlushed_many": "W buforze czeka {{count}} zdarzeń, najstarsze od {{oldest}}, i nic nie zostało jeszcze zapisane do ujścia \"{{sink}}\". Zapis następuje co {{interval}} albo wcześniej, po {{batchSize}} zdarzeniach. $t(usage.verdicts.ingestion.instance)",
+        "neverFlushed_other": "W buforze czeka {{count}} zdarzeń, najstarsze od {{oldest}}, i nic nie zostało jeszcze zapisane do ujścia \"{{sink}}\". Zapis następuje co {{interval}} albo wcześniej, po {{batchSize}} zdarzeniach. $t(usage.verdicts.ingestion.instance)",
+        "recordingHeadline": "Zapisuje",
+        "recordingBuffered_one": "W buforze czeka {{count}} zdarzenie, najstarsze od {{oldest}}. Ostatni zapis do ujścia \"{{sink}}\": {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingBuffered_few": "W buforze czekają {{count}} zdarzenia, najstarsze od {{oldest}}. Ostatni zapis do ujścia \"{{sink}}\": {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingBuffered_many": "W buforze czeka {{count}} zdarzeń, najstarsze od {{oldest}}. Ostatni zapis do ujścia \"{{sink}}\": {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingBuffered_other": "W buforze czeka {{count}} zdarzeń, najstarsze od {{oldest}}. Ostatni zapis do ujścia \"{{sink}}\": {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingIdleDetail": "Nic nie czeka. Ostatni zapis do ujścia \"{{sink}}\": {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "idleHeadline": "Nic jeszcze nie dotarło",
+        "idleDetail": "Bufor jest pusty, a ta instancja niczego nie zapisała. Tak wygląda sprawna wtyczka bez producenta zdarzeń i tak samo wygląda zepsuty producent. $t(usage.verdicts.ingestion.instance)"
+      },
+      "rateCard": {
+        "meteringOnlyHeadline": "Tylko pomiar",
+        "meteringOnlyDetail": "Nie skonfigurowano cennika, więc ta instalacja mierzy bez wyceny. Okresy można otwierać i odczytywać, ale nie zamykać.",
+        "ratedHeadline": "Wyceniane",
+        "rated_one": "{{count}} licznik wyceniony w {{currency}}. Okres jest przetrzymywany przez {{delay}} po swoim końcu, zanim będzie można go zamknąć.",
+        "rated_few": "{{count}} liczniki wycenione w {{currency}}. Okres jest przetrzymywany przez {{delay}} po swoim końcu, zanim będzie można go zamknąć.",
+        "rated_many": "{{count}} liczników wycenionych w {{currency}}. Okres jest przetrzymywany przez {{delay}} po swoim końcu, zanim będzie można go zamknąć.",
+        "rated_other": "{{count}} liczników wycenionych w {{currency}}. Okres jest przetrzymywany przez {{delay}} po swoim końcu, zanim będzie można go zamknąć."
+      },
+      "closability": {
+        "closed": "Zamknięty {{closedAt}}. Utrwalony wynik to to, co zafakturowano; ponowne zamknięcie zwróciłoby go bez zmian, zamiast zafakturować drugi raz.",
+        "unknown": "Trwa odczyt cennika, więc nie wiadomo jeszcze, czy ten okres można zamknąć.",
+        "noRateCard": "Nie ma cennika, więc nie ma według czego wycenić tego okresu. Skonfiguruj `billing` w opcjach wtyczki, zanim go zamkniesz.",
+        "tooEarly": "Nie można zamknąć przed {{closableAt}}. Okno kończy się {{endsAt}}.",
+        "tooEarlyWithHold": "Nie można zamknąć przed {{closableAt}}. Okno kończy się {{endsAt}} i jest przetrzymywane jeszcze przez {{delay}}, aby zdążyły dotrzeć zdarzenia czekające w buforze.",
+        "closable": "Okno się skończyło. Zamknięcie wyceni je według cennika i utrwali wynik; operację można bezpiecznie powtórzyć i nie zafakturuje dwa razy."
+      },
+      "verification": {
+        "unchanged": "Utrwalony wynik nie został nadpisany i nie zostanie.",
+        "matchesHeadline": "Zgadza się",
+        "matchesDetail": "Wyceniony ponownie z dziennika, ten okres nadal daje {{total}} i ten sam skrót. Dowody stojące za fakturą nie zmieniły się.",
+        "differsHeadline": "Nie zgadza się",
+        "noneMovedDetail": "Żadnemu licznikowi nie zmieniła się ani ilość, ani kwota, a skrót nadal jest inny. Skrót obejmuje dowody, a nie tylko sumę: są w nim chwile, które obejmuje każda pozycja, oraz skrót migawki, z której ją wyceniono. Dokładnie tak wyglądają zdarzenia, które się znoszą, albo takie o ilości zero. $t(usage.verdicts.verification.unchanged)",
+        "differ_one": "Różni się {{moved}} z {{count}} licznika. Dziennik daje teraz w sumie {{recomputed}} wobec {{stored}}, które zafakturowano, czyli różnicę {{delta}}. $t(usage.verdicts.verification.unchanged)",
+        "differ_few": "Różni się {{moved}} z {{count}} liczników. Dziennik daje teraz w sumie {{recomputed}} wobec {{stored}}, które zafakturowano, czyli różnicę {{delta}}. $t(usage.verdicts.verification.unchanged)",
+        "differ_many": "Różni się {{moved}} z {{count}} liczników. Dziennik daje teraz w sumie {{recomputed}} wobec {{stored}}, które zafakturowano, czyli różnicę {{delta}}. $t(usage.verdicts.verification.unchanged)",
+        "differ_other": "Różni się {{moved}} z {{count}} liczników. Dziennik daje teraz w sumie {{recomputed}} wobec {{stored}}, które zafakturowano, czyli różnicę {{delta}}. $t(usage.verdicts.verification.unchanged)"
+      }
+    }
+  }
+}

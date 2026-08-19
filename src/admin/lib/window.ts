@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import type { PeriodRow, UsageWindow } from "./api";
 
 /**
@@ -58,24 +59,21 @@ export interface ResolvedWindow {
  * Failures are caught here rather than left to the route because the route's
  * message is written for a machine producer sending a malformed query, and an
  * operator who mistyped a date deserves to be told that instead of watching a
- * request fail.
+ * request fail - in their own language, which is why `t` is a parameter. It stays
+ * a parameter rather than a hook so this remains a pure function.
  */
-export function resolveWindow(from: string, to: string): ResolvedWindow {
+export function resolveWindow(t: TFunction, from: string, to: string): ResolvedWindow {
   const start = instant(from);
   const end = instant(to);
 
   if (!start || !end) {
-    return { error: "Both dates are required, as YYYY-MM-DD.", window: null };
+    return { error: t("usage.window.bothRequired"), window: null };
   }
   if (start === end) {
-    return {
-      error:
-        "That window has no width, so it would always total nothing. `To` is exclusive, so it must be the day AFTER the last one you want.",
-      window: null,
-    };
+    return { error: t("usage.window.noWidth"), window: null };
   }
   if (start > end) {
-    return { error: "The window ends before it starts.", window: null };
+    return { error: t("usage.window.endsBeforeStart"), window: null };
   }
   return { error: null, window: { from: start, to: end } };
 }

@@ -1,4 +1,5 @@
 import { Button, Table, Text } from "@medusajs/ui";
+import { useTranslation } from "react-i18next";
 import type { UsageStatusResponse } from "../lib/api";
 import { formatAmount, formatDuration, formatInstant, formatQuantity } from "../lib/format";
 import type { Request } from "../lib/use-request";
@@ -20,17 +21,18 @@ import { Empty, Failure, Field, Loading, Panel, VerdictLine } from "./panel";
  * rate card that was never configured.
  */
 export const IngestionPanel = ({ request }: { request: Request<UsageStatusResponse> }) => {
+  const { t } = useTranslation();
   const { data, error, isLoading, reload } = request;
 
   return (
     <Panel
       actions={
         <Button disabled={isLoading} onClick={reload} size="small" variant="secondary">
-          Refresh
+          {t("usage.common.refresh")}
         </Button>
       }
-      description="What this instance of the plugin is doing with the events it is given."
-      title="Ingestion"
+      description={t("usage.ingestion.description")}
+      title={t("usage.ingestion.title")}
     >
       {error ? <Failure message={error} /> : null}
       {isLoading && !data ? <Loading rows={2} /> : null}
@@ -39,60 +41,89 @@ export const IngestionPanel = ({ request }: { request: Request<UsageStatusRespon
   );
 };
 
-const Body = ({ status }: { status: UsageStatusResponse }) => (
-  <>
-    <VerdictLine verdict={readIngestion(status)} />
-    <div className="grid grid-cols-2 gap-4 px-6 py-4 md:grid-cols-4">
-      <Field label="Sink">{status.sink}</Field>
-      <Field label="Registered sinks">{status.sinks.join(", ") || "-"}</Field>
-      <Field label="Flush mode">{status.flush_mode}</Field>
-      <Field label="Buffered">{formatQuantity(status.buffered)}</Field>
-      <Field label="Oldest buffered">{formatDuration(status.oldest_buffered_ms)}</Field>
-      <Field label="Batch size">{formatQuantity(status.batch_size)}</Field>
-      <Field label="Flush interval">{formatDuration(status.flush_interval_ms)}</Field>
-      <Field label="Last flush">{formatInstant(status.last_flush_at)}</Field>
-    </div>
-    <VerdictLine verdict={readRateCard(status)} />
-    {status.rates ? <Rates rates={status.rates} /> : null}
-  </>
-);
+const Body = ({ status }: { status: UsageStatusResponse }) => {
+  const { t } = useTranslation();
 
-const Rates = ({ rates }: { rates: NonNullable<UsageStatusResponse["rates"]> }) => (
-  <div className="px-6 pb-4">
-    <Table>
-      <Table.Header>
-        <Table.Row>
-          <Table.HeaderCell>Meter</Table.HeaderCell>
-          <Table.HeaderCell>Price</Table.HeaderCell>
-          <Table.HeaderCell>Included</Table.HeaderCell>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {rates.meters.map((rate) => (
-          <Table.Row key={rate.meter}>
-            <Table.Cell>
-              <Text as="span" family="mono" size="small">
-                {rate.meter}
-              </Text>
-            </Table.Cell>
-            <Table.Cell>
-              {formatAmount(rate.unitAmount, rates.currency)}
-              <Text as="span" className="text-ui-fg-subtle" size="small">
-                {rate.perUnits === 1 ? " per unit" : ` per ${formatQuantity(rate.perUnits)} units`}
-              </Text>
-            </Table.Cell>
-            <Table.Cell>
-              {rate.includedUnits > 0 ? `${formatQuantity(rate.includedUnits)} free` : "-"}
-            </Table.Cell>
+  return (
+    <>
+      <VerdictLine verdict={readIngestion(t, status)} />
+      <div className="grid grid-cols-2 gap-4 px-6 py-4 md:grid-cols-4">
+        <Field label={t("usage.ingestion.fields.sink")}>{status.sink}</Field>
+        <Field label={t("usage.ingestion.fields.registeredSinks")}>
+          {status.sinks.join(", ") || "-"}
+        </Field>
+        <Field label={t("usage.ingestion.fields.flushMode")}>{status.flush_mode}</Field>
+        <Field label={t("usage.ingestion.fields.buffered")}>
+          {formatQuantity(status.buffered)}
+        </Field>
+        <Field label={t("usage.ingestion.fields.oldestBuffered")}>
+          {formatDuration(status.oldest_buffered_ms)}
+        </Field>
+        <Field label={t("usage.ingestion.fields.batchSize")}>
+          {formatQuantity(status.batch_size)}
+        </Field>
+        <Field label={t("usage.ingestion.fields.flushInterval")}>
+          {formatDuration(status.flush_interval_ms)}
+        </Field>
+        <Field label={t("usage.ingestion.fields.lastFlush")}>
+          {formatInstant(status.last_flush_at)}
+        </Field>
+      </div>
+      <VerdictLine verdict={readRateCard(t, status)} />
+      {status.rates ? <Rates rates={status.rates} /> : null}
+    </>
+  );
+};
+
+const Rates = ({ rates }: { rates: NonNullable<UsageStatusResponse["rates"]> }) => {
+  const { t } = useTranslation();
+
+  return (
+    <div className="px-6 pb-4">
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.HeaderCell>{t("usage.common.meter")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.ingestion.rates.price")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.ingestion.rates.included")}</Table.HeaderCell>
           </Table.Row>
-        ))}
-      </Table.Body>
-    </Table>
-    {rates.meters.length === 0 ? (
-      <Empty title="The rate card prices no meters">
-        A rate card with no meters rates every period at zero. That is a valid answer and a
-        surprising invoice, so it is worth checking that it was the intended one.
-      </Empty>
-    ) : null}
-  </div>
-);
+        </Table.Header>
+        <Table.Body>
+          {rates.meters.map((rate) => (
+            <Table.Row key={rate.meter}>
+              <Table.Cell>
+                <Text as="span" family="mono" size="small">
+                  {rate.meter}
+                </Text>
+              </Table.Cell>
+              <Table.Cell>
+                {formatAmount(rate.unitAmount, rates.currency)}
+                <Text as="span" className="text-ui-fg-subtle" size="small">
+                  {/* `count` picks the plural - English has two forms and Polish
+                      has four - while `units` carries the grouped number, which
+                      i18next would not group on its own. */}
+                  {t("usage.ingestion.rates.perUnit", {
+                    count: rate.perUnits,
+                    units: formatQuantity(rate.perUnits),
+                  })}
+                </Text>
+              </Table.Cell>
+              <Table.Cell>
+                {rate.includedUnits > 0
+                  ? t("usage.ingestion.rates.free", {
+                      units: formatQuantity(rate.includedUnits),
+                    })
+                  : "-"}
+              </Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table>
+      {rates.meters.length === 0 ? (
+        <Empty title={t("usage.ingestion.rates.emptyTitle")}>
+          {t("usage.ingestion.rates.emptyBody")}
+        </Empty>
+      ) : null}
+    </div>
+  );
+};

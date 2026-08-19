@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import type { TFunction } from "i18next";
+import { beforeAll, describe, expect, it } from "vitest";
+import { translator } from "../i18n/__tests__/instance";
 import type { PeriodRow } from "./api";
 import { defaultWindow, periodWindow, resolveWindow, toDateInput } from "./window";
+
+let t: TFunction;
+
+beforeAll(async () => {
+  t = await translator("en");
+});
 
 const NOW = new Date("2026-08-19T11:39:00.000Z");
 
@@ -22,27 +30,27 @@ describe("toDateInput", () => {
 
 describe("resolveWindow", () => {
   it("turns two dates into the half-open window the API takes", () => {
-    expect(resolveWindow("2026-08-01", "2026-09-01")).toEqual({
+    expect(resolveWindow(t, "2026-08-01", "2026-09-01")).toEqual({
       error: null,
       window: { from: "2026-08-01T00:00:00.000Z", to: "2026-09-01T00:00:00.000Z" },
     });
   });
 
   it("refuses a window that ends before it starts", () => {
-    const resolved = resolveWindow("2026-09-01", "2026-08-01");
+    const resolved = resolveWindow(t, "2026-09-01", "2026-08-01");
     expect(resolved.window).toBeNull();
     expect(resolved.error).toMatch(/ends before it starts/u);
   });
 
   it("tells a zero-width window apart from a reversed one, because the fix differs", () => {
-    const resolved = resolveWindow("2026-08-01", "2026-08-01");
+    const resolved = resolveWindow(t, "2026-08-01", "2026-08-01");
     expect(resolved.window).toBeNull();
     expect(resolved.error).toMatch(/exclusive/u);
   });
 
   it("refuses anything that is not a date, rather than sending it and failing", () => {
-    expect(resolveWindow("", "2026-08-01").error).toMatch(/required/u);
-    expect(resolveWindow("01-08-2026", "2026-08-01").window).toBeNull();
+    expect(resolveWindow(t, "", "2026-08-01").error).toMatch(/required/u);
+    expect(resolveWindow(t, "01-08-2026", "2026-08-01").window).toBeNull();
   });
 });
 

@@ -2,6 +2,7 @@ import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { ChartBar } from "@medusajs/icons";
 import { Button, Container, Heading, Input, Label, Text } from "@medusajs/ui";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getStatus } from "../../lib/api";
 import { EventsDrawer } from "../../components/events-drawer";
 import { IngestionPanel } from "../../components/ingestion-panel";
@@ -31,6 +32,7 @@ import { DEFAULT_WINDOW_DAYS, defaultWindow, resolveWindow } from "../../lib/win
  * question worth asking the log.
  */
 const UsagePage = () => {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(() => ({ ...defaultWindow(new Date()), subject: "" }));
   const [applied, setApplied] = useState(draft);
 
@@ -42,8 +44,8 @@ const UsagePage = () => {
 
   const status = useRequest(() => getStatus(), [refreshToken]);
   const window = useMemo(
-    () => resolveWindow(applied.from, applied.to),
-    [applied.from, applied.to],
+    () => resolveWindow(t, applied.from, applied.to),
+    [applied.from, applied.to, t],
   );
   const meters = useMemo(
     () => status.data?.rates?.meters.map((rate) => rate.meter) ?? [],
@@ -54,10 +56,9 @@ const UsagePage = () => {
     <div className="flex flex-col gap-y-3">
       <Container className="flex flex-col gap-y-4">
         <div className="flex flex-col gap-y-1">
-          <Heading level="h1">Usage</Heading>
+          <Heading level="h1">{t("usage.heading")}</Heading>
           <Text className="text-ui-fg-subtle" size="small">
-            Metered usage, and the billing periods rated from it. Windows are half-open and UTC:
-            everything from the first date up to, but not including, the second.
+            {t("usage.description")}
           </Text>
         </div>
         <form
@@ -69,21 +70,21 @@ const UsagePage = () => {
         >
           <div className="flex flex-col gap-y-1">
             <Label htmlFor="usage-subject" size="xsmall" weight="plus">
-              Subject
+              {t("usage.filters.subject")}
             </Label>
             <Input
               id="usage-subject"
               onChange={(event) => {
                 setDraft((current) => ({ ...current, subject: event.target.value }));
               }}
-              placeholder="Every subject"
+              placeholder={t("usage.filters.subjectPlaceholder")}
               size="small"
               value={draft.subject}
             />
           </div>
           <div className="flex flex-col gap-y-1">
             <Label htmlFor="usage-from" size="xsmall" weight="plus">
-              From
+              {t("usage.filters.from")}
             </Label>
             <Input
               id="usage-from"
@@ -97,7 +98,7 @@ const UsagePage = () => {
           </div>
           <div className="flex flex-col gap-y-1">
             <Label htmlFor="usage-to" size="xsmall" weight="plus">
-              To, exclusive
+              {t("usage.filters.to")}
             </Label>
             <Input
               id="usage-to"
@@ -110,7 +111,7 @@ const UsagePage = () => {
             />
           </div>
           <Button size="small" type="submit" variant="secondary">
-            Apply
+            {t("usage.filters.apply")}
           </Button>
           <Button
             onClick={() => {
@@ -122,7 +123,7 @@ const UsagePage = () => {
             type="button"
             variant="transparent"
           >
-            Last {DEFAULT_WINDOW_DAYS} days
+            {t("usage.filters.reset", { count: DEFAULT_WINDOW_DAYS })}
           </Button>
         </form>
       </Container>
@@ -169,9 +170,17 @@ const UsagePage = () => {
 
 // Its own sidebar entry. Usage is not a product attribute and not an order one,
 // so it does not belong as a column or a widget on either of those screens.
+//
+// `label` is a translation key, not a literal: with `translationNs` set the
+// dashboard resolves it with `t(label, { ns: translationNs })`. This plugin
+// registers its strings in the default `translation` namespace, and the
+// dashboard initialises i18next with `fallbackNS: "translation"`, so the
+// prefixed key resolves through it. The sidebar entry and the page heading read
+// the same key and cannot drift apart.
 export const config = defineRouteConfig({
   icon: ChartBar,
-  label: "Usage",
+  label: "usage.heading",
+  translationNs: "usage",
 });
 
 export default UsagePage;

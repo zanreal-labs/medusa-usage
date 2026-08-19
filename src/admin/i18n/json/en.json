@@ -1,0 +1,205 @@
+{
+  "usage": {
+    "heading": "Usage",
+    "description": "Metered usage, and the billing periods rated from it. Windows are half-open and UTC: everything from the first date up to, but not including, the second.",
+    "common": {
+      "amount": "Amount",
+      "events": "Events",
+      "meter": "Meter",
+      "quantity": "Quantity",
+      "readingTheLog": "Reading the log",
+      "refresh": "Refresh",
+      "requestFailed": "The request failed, and said nothing about why.",
+      "subject": "Subject",
+      "unavailable": "unavailable"
+    },
+    "filters": {
+      "apply": "Apply",
+      "from": "From",
+      "reset_one": "Last {{count}} day",
+      "reset_other": "Last {{count}} days",
+      "subject": "Subject",
+      "subjectPlaceholder": "Every subject",
+      "to": "To, exclusive"
+    },
+    "window": {
+      "bothRequired": "Both dates are required, as YYYY-MM-DD.",
+      "endsBeforeStart": "The window ends before it starts.",
+      "noWidth": "That window has no width, so it would always total nothing. `To` is exclusive, so it must be the day AFTER the last one you want."
+    },
+    "ingestion": {
+      "title": "Ingestion",
+      "description": "What this instance of the plugin is doing with the events it is given.",
+      "fields": {
+        "batchSize": "Batch size",
+        "buffered": "Buffered",
+        "flushInterval": "Flush interval",
+        "flushMode": "Flush mode",
+        "lastFlush": "Last flush",
+        "oldestBuffered": "Oldest buffered",
+        "registeredSinks": "Registered sinks",
+        "sink": "Sink"
+      },
+      "rates": {
+        "included": "Included",
+        "price": "Price",
+        "free": "{{units}} free",
+        "perUnit_one": " per unit",
+        "perUnit_other": " per {{units}} units",
+        "emptyTitle": "The rate card prices no meters",
+        "emptyBody": "A rate card with no meters rates every period at zero. That is a valid answer and a surprising invoice, so it is worth checking that it was the intended one."
+      }
+    },
+    "meters": {
+      "title": "Meters",
+      "descriptionAll": "What every subject together consumed in the chosen window, meter by meter.",
+      "descriptionSubject": "What \"{{subject}}\" consumed in the chosen window, meter by meter.",
+      "add": "Add",
+      "addPlaceholder": "Another meter name",
+      "columns": {
+        "digest": "Digest",
+        "first": "First",
+        "last": "Last"
+      },
+      "noneInWindow": "none in this window",
+      "emptyTitle": "No meters to ask about",
+      "emptyBody": "This installation has no rate card, so the plugin does not know which meter names exist - it records whatever a producer sends it. Type a meter name above to ask the log what it holds for that one."
+    },
+    "periods": {
+      "title": "Billing periods",
+      "descriptionAll": "Newest window first. A period is closed when, and only when, it has a frozen result. The dates above do not filter this list.",
+      "descriptionSubject": "Periods for \"{{subject}}\", newest window first. A period is closed when, and only when, it has a frozen result. The dates above do not filter this list.",
+      "status": {
+        "any": "Any status",
+        "closed": "Closed",
+        "open": "Open, not billed"
+      },
+      "columns": {
+        "closable": "Closable",
+        "status": "Status",
+        "window": "Window"
+      },
+      "windowRange": "{{from}} to {{to}}",
+      "badge": {
+        "closed": "Closed",
+        "open": "Open"
+      },
+      "statusUnavailable": "Status unavailable",
+      "shortReason": {
+        "closable": "Ready to close",
+        "closed": "Already closed",
+        "noRateCard": "No rate card",
+        "tooEarly": "Still accruing",
+        "unknown": "-"
+      },
+      "open": "Open",
+      "truncated_one": "Showing the first {{count}}, which is as many as this panel asks for. There are very likely more: narrow by subject or by status to reach them.",
+      "truncated_other": "Showing the first {{count}}, which is as many as this panel asks for. There are very likely more: narrow by subject or by status to reach them.",
+      "emptyTitle": "No periods have been opened",
+      "emptyBody": "This is the expected state on a new installation, and it is not a fault. The plugin does not create periods, because only the application knows what a billing cycle is here - whether it is a calendar month, thirty days from the day someone signed up, or something else. Open one with `POST /admin/usage/periods`, from a job of your own, and it will appear in this list.",
+      "emptyFilteredTitle": "No periods match these filters",
+      "emptyFilteredBody": "Clear the subject, or set the status back to any, to see whether there are periods that do not match rather than none at all."
+    },
+    "events": {
+      "title": "Events",
+      "descriptionAll": "{{meter}}, every subject, oldest first, from {{from}} up to {{to}}.",
+      "descriptionAllNoWindow": "{{meter}}, every subject, oldest first.",
+      "descriptionSubject": "{{meter}} for {{subject}}, oldest first, from {{from}} up to {{to}}.",
+      "descriptionSubjectNoWindow": "{{meter}} for {{subject}}, oldest first.",
+      "columns": {
+        "key": "Key",
+        "occurred": "Occurred",
+        "source": "Source"
+      },
+      "emptyTitle": "No events in this window",
+      "emptyBody": "Nothing was recorded on this meter in the window named above. A meter that has never been written to and a meter whose usage falls outside the window look the same from here, so widening the window is the first thing to try.",
+      "shownAll_one": "{{shown}} shown, which is all of them.",
+      "shownAll_other": "{{shown}} shown, which is all of them.",
+      "shownMore_one": "{{shown}} shown, and there are more.",
+      "shownMore_other": "{{shown}} shown, and there are more.",
+      "loadMore": "Load more",
+      "tryAgain": "Try again"
+    },
+    "period": {
+      "title": "Billing period",
+      "fields": {
+        "opened": "Opened",
+        "windowEnds": "Window ends, exclusive",
+        "windowStarts": "Window starts"
+      },
+      "statusUnknown": "Whether this period can be closed is not known: reading the plugin's status failed. {{error}}",
+      "close": "Close period",
+      "verify": "Verify",
+      "confirm": {
+        "cancel": "Cancel",
+        "confirm": "Close period",
+        "description": "This rates {{subject}} over {{from}} to {{to}} against the current rate card and freezes the answer. It is safe to retry and cannot bill the same period twice, but the frozen result does not move afterwards.",
+        "title": "Close this period?"
+      },
+      "noResultTitle": "No frozen result",
+      "noResultBody": "This period is open, which means it has not been billed. That is a different thing from a result whose total is zero: an open period says do not bill this yet, while a closed one worth nothing says it provably came to nothing.",
+      "result": {
+        "heading": "Frozen result",
+        "chargedFor": "Charged for",
+        "closed": "Closed",
+        "digest": "Digest",
+        "eventsBehind": "Events behind it",
+        "ratedFromSink": "Rated from sink",
+        "total": "Total"
+      },
+      "verification": {
+        "heading": "Re-derived from the log",
+        "amountDelta": "Amount delta",
+        "billed": "Billed",
+        "now": "Now",
+        "quantityDelta": "Quantity delta"
+      },
+      "accrued": {
+        "heading": "Accrued so far, over this period's own boundaries"
+      }
+    },
+    "verdicts": {
+      "ingestion": {
+        "instance": "These counts are for the instance that served this request, not the deployment.",
+        "flushFailedHeadline": "The last flush failed",
+        "flushFailed_one": "The \"{{sink}}\" sink said: {{error}}. {{count}} event waiting. Until a flush succeeds, usage is only in memory.",
+        "flushFailed_other": "The \"{{sink}}\" sink said: {{error}}. {{count}} events waiting. Until a flush succeeds, usage is only in memory.",
+        "immediateHeadline": "Writing each event as it arrives",
+        "immediateDetail": "Every event is written to the \"{{sink}}\" sink as it arrives, so nothing buffers and there is no flush to be behind on.",
+        "neverFlushedHeadline": "Buffering, nothing written yet",
+        "neverFlushed_one": "{{count}} event waiting, oldest {{oldest}}, and nothing has been flushed to \"{{sink}}\" yet. Flushes run every {{interval}}, or sooner at {{batchSize}} events. $t(usage.verdicts.ingestion.instance)",
+        "neverFlushed_other": "{{count}} events waiting, oldest {{oldest}}, and nothing has been flushed to \"{{sink}}\" yet. Flushes run every {{interval}}, or sooner at {{batchSize}} events. $t(usage.verdicts.ingestion.instance)",
+        "recordingHeadline": "Recording",
+        "recordingBuffered_one": "{{count}} event waiting, oldest {{oldest}}. Last flush to \"{{sink}}\" at {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingBuffered_other": "{{count}} events waiting, oldest {{oldest}}. Last flush to \"{{sink}}\" at {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "recordingIdleDetail": "Nothing waiting. The last flush to \"{{sink}}\" was at {{lastFlush}}. $t(usage.verdicts.ingestion.instance)",
+        "idleHeadline": "Nothing has arrived yet",
+        "idleDetail": "Nothing is buffered and this instance has not flushed anything. That is what a healthy plugin with no producer looks like, and also what a broken producer looks like. $t(usage.verdicts.ingestion.instance)"
+      },
+      "rateCard": {
+        "meteringOnlyHeadline": "Metering only",
+        "meteringOnlyDetail": "No rate card is configured, so this installation meters without pricing. Periods can be opened and read, but not closed.",
+        "ratedHeadline": "Rated",
+        "rated_one": "{{count}} meter priced in {{currency}}. A period is held open for {{delay}} after it ends before it can be closed.",
+        "rated_other": "{{count}} meters priced in {{currency}}. A period is held open for {{delay}} after it ends before it can be closed."
+      },
+      "closability": {
+        "closed": "Closed at {{closedAt}}. The frozen result is what was billed, and closing again would return it unchanged rather than bill twice.",
+        "unknown": "Still reading the rate card, so whether this period can be closed is not known yet.",
+        "noRateCard": "There is no rate card, so there is nothing to rate this period against. Configure `billing` in the plugin options before closing it.",
+        "tooEarly": "Not closable until {{closableAt}}. The window ends at {{endsAt}}.",
+        "tooEarlyWithHold": "Not closable until {{closableAt}}. The window ends at {{endsAt}}, and it is held open for a further {{delay}} so events still in a buffer can land.",
+        "closable": "The window is over. Closing rates it against the rate card and freezes the answer; it is safe to retry and cannot bill twice."
+      },
+      "verification": {
+        "unchanged": "The frozen result has not been rewritten, and will not be.",
+        "matchesHeadline": "Verifies",
+        "matchesDetail": "Rated again from the log, this period still comes to {{total}} and the same digest. The evidence behind the invoice has not moved.",
+        "differsHeadline": "Does not verify",
+        "noneMovedDetail": "No meter's quantity or amount has moved, and the digest still differs. A digest covers the evidence and not only the total: the instants a line spans, and the snapshot it was rated from, are inside it. Events that cancel out, or arrive with a quantity of zero, look exactly like this. $t(usage.verdicts.verification.unchanged)",
+        "differ_one": "{{moved}} of {{count}} meter differs. The log now totals {{recomputed}} against the {{stored}} that was billed, a difference of {{delta}}. $t(usage.verdicts.verification.unchanged)",
+        "differ_other": "{{moved}} of {{count}} meters differ. The log now totals {{recomputed}} against the {{stored}} that was billed, a difference of {{delta}}. $t(usage.verdicts.verification.unchanged)"
+      }
+    }
+  }
+}

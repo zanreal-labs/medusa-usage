@@ -1,4 +1,6 @@
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 /**
  * One request, its error, and a way to ask again.
@@ -33,6 +35,7 @@ export interface Request<T> {
  * rather than omitting an entry.
  */
 export function useRequest<T>(run: () => Promise<T>, deps: readonly unknown[]): Request<T> {
+  const { t } = useTranslation();
   const [state, setState] = useState<{ data: T | null; error: string | null; isLoading: boolean }>({
     data: null,
     error: null,
@@ -61,7 +64,7 @@ export function useRequest<T>(run: () => Promise<T>, deps: readonly unknown[]): 
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setState({ data: null, error: messageOf(error), isLoading: false });
+          setState({ data: null, error: messageOf(t, error), isLoading: false });
         }
       });
 
@@ -80,10 +83,17 @@ export function useRequest<T>(run: () => Promise<T>, deps: readonly unknown[]): 
   };
 }
 
-/** The API's own words where there are any. */
-export function messageOf(error: unknown): string {
+/**
+ * The API's own words where there are any.
+ *
+ * The routes answer in the language they were written in and that text is passed
+ * through untouched, because it is the server's account of what happened and this
+ * side cannot improve on it. Only the last resort - a failure that said nothing at
+ * all - is this package's own sentence, so only that one is translated.
+ */
+export function messageOf(t: TFunction, error: unknown): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-  return "The request failed, and said nothing about why.";
+  return t("usage.common.requestFailed");
 }
