@@ -1,0 +1,170 @@
+---
+title: Deduplication, in full
+description: How an event's key is derived from what it means rather than generated, the two forms that derivation takes, and why that is what makes a retry free instead of a double charge.
+---
+
+If this plugin has one idea worth taking away, it is this one. Everything else -
+the sink contract, the buffer, the billing periods - is built to preserve the
+property this page describes, not the other way around.
+
+## The asymmetry that decides everything here
+
+Usage that double-counts is worse than usage that goes missing. A total that came
+out too small is visible: it looks wrong, and whoever is watching the number
+notices. A total that is quietly too large becomes an invoice, and nobody finds
+out until a customer disputes it - by which point the money has already moved.
+Every rule below exists to make that second failure structurally impossible
+rather than merely unlikely.
+
+## A key is a pure function of what the event means
+
+`dedupeKeyFor` in `src/lib/usage/dedupe.ts` builds a SHA-256 over the event's own
+facts, and nothing else. No random bytes, no `Date.now()`, no process id, no
+hostname, no counter, no arrival order, no database sequence. Call it twice with
+the same facts, on two different machines, in two different years, and it
+returns the same key both times.
+
+That single property is what turns three ordinary failure modes into non-events:
+
+- **a retry**, because a client's HTTP call timed out on a request that had, in
+  fact, already succeeded on the server;
+- **a redeploy or crash** that replays a queue, an unacknowledged message, or a
+  webhook your infrastructure resends until it is told otherwise;
+- **a backfill run twice**, by an operator who was not sure the first run
+  finished.
+
+Each of those re-derives the identical key, and the append becomes a no-op
+because a sink is contractually required to keep at most one row per key.
+Retrying is not merely tolerated here - it is the correct response to any doubt
+about whether a call landed, and the deduplication key is what makes that true.
+
+## The key is also the primary key
+
+`dedupeKeyFor` returns a string prefixed `uev_`, and that string is the row's own
+primary key in the sink, not a value the sink separately indexes. That
+distinction matters more than it looks: it means deduplication is enforced by the
+database engine's own uniqueness constraint, not by application code that reads
+before it writes.
+
+A read-then-write check has a gap in it - between the read and the write, another
+process can insert the very row the check just failed to find - and closing that
+gap usually means a lock, a transaction, or accepting the race. Making the
+dedupe key the primary key removes the gap instead of guarding it: `INSERT ...
+ON CONFLICT DO NOTHING` either inserts the row or it does not, atomically, and
+there is no window in between for a second writer to slip through.
+
+## Two forms, because a key needs two different kinds of input
+
+### Explicit
+
+Pass `idempotencyKey` when you already have a natural identity for the thing
+being metered - the id of the request, of the upstream webhook, of the row you
+are importing:
+
+```text
+sha256( "usg1" US "explicit" US meter US subject US idempotencyKey )
+```
+
+It is scoped to `(meter, subject)` rather than taken bare, and that scoping is
+not incidental. A caller that meters both `tokens_in` and `tokens_out` for the
+same request id needs two rows, not one - and without the scope, the second
+`record` call would derive the same key as the first and silently vanish into
+the sink's "already have this" branch. Scoping the explicit key to the grain
+aggregation actually runs at (a meter, for a subject) makes that class of mistake
+unrepresentable rather than merely documented against.
+
+### Derived
+
+Omit `idempotencyKey`, and the key comes from the full statement of fact instead:
+
+```text
+sha256( "usg1" US "derived" US meter US subject US occurredAt US quantity US source US properties )
+```
+
+where `US` is the ASCII unit separator, U+001F. `occurredAt` is serialized as an
+ISO 8601 instant at millisecond precision in UTC, so the key does not depend on
+which time zone the recording process happens to run in. `quantity` is a decimal
+integer. `properties` is canonical JSON - keys sorted, no incidental whitespace -
+which is what stops `{"a":1,"b":2}` and `{"b":2,"a":1}` from deriving different
+keys for what is obviously the same event.
+
+## What makes the join itself safe
+
+Joining fields with a separator is only an injective encoding of those fields if
+none of them can contain the separator - otherwise two different field tuples
+could join to the same string, and two genuinely different events would collapse
+into one key. `meter`, `subject`, `source` and an explicit key are all validated
+in `src/lib/usage/event.ts` to contain no control characters at all, which rules
+out U+001F along with everything else in that range. The join is therefore safe
+by construction, not by convention.
+
+Two smaller details are worth knowing because they are easy to get wrong when
+reimplementing this scheme elsewhere:
+
+- **No property bag and an empty property bag hash identically.** `{}` and
+  `undefined` describe the same event - no dimensions were recorded - so
+  `normalizeUsageEvent` collapses an empty object to `null` before anything is
+  hashed. Without that collapse, a client library that always sends `{}` and one
+  that omits the field entirely would derive different keys for the same fact.
+- **`explicit` and `derived` are separate domains inside the hashed text.**
+  Prefixing the material with which scheme produced it means the two spaces
+  cannot collide even in principle - an explicit key and a coincidentally
+  matching derived tuple can never land on the same hash.
+
+## What the derived form costs, stated plainly
+
+Two events that are genuinely distinct but identical in every field the derived
+key reads - down to the millisecond - collapse into one row. That is a real
+undercount, and it is the deliberate side of the asymmetry this page opened
+with: the scheme errs toward counting less rather than counting twice.
+
+If your producer can genuinely emit two such events - several units of the same
+meter, for the same subject, in the same millisecond, with nothing else to tell
+them apart - you have three ways out, and the plugin will not choose one for you:
+
+1. Pass an explicit `idempotencyKey` (usually the right answer, if one exists).
+2. Make the events distinguishable with an ordinal in `properties`.
+3. Combine them into one event with a larger `quantity` - which, most of the
+   time this comes up, is what was actually meant in the first place.
+
+## Versioning the scheme itself
+
+The literal string `usg1` is the first thing hashed, in both forms. It pins this
+exact derivation. If the rules above ever change - a new field joins the derived
+tuple, or the separator changes - the version prefix changes with them, so the
+two schemes can never collide, and every row already written keeps the key it
+was written with. Nothing about deduplication ever rehashes existing rows;
+rehashing a log is indistinguishable from rewriting it, and rewriting an
+append-only log defeats the reason it is append-only.
+
+The four vectors below are pinned in `src/lib/usage/dedupe.test.ts` and are the
+actual contract, not documentation of one:
+
+```ts
+sha256("usg1\x1Fexplicit\x1Fapi_request\x1Fcus_1\x1Freq_1")
+sha256("usg1\x1Fderived\x1Fapi_request\x1Fcus_1\x1F2026-01-01T00:00:00.000Z\x1F1\x1F\x1Fnull")
+```
+
+Moving them would mean every key already sitting in a production log stops
+matching the key the same event derives today - and every one of those events
+would be counted again the next time it arrived.
+
+## What this buys you, concretely
+
+Once a key is derived rather than generated, every layer above it gets to be
+naive about retries instead of careful about them:
+
+- `record` can be called with the same event twice, from two different
+  processes, and the log gains one row.
+- The [ingestion buffer](./recording.en.mdx#why-ingestion-is-batched) can dedupe
+  a burst before it even reaches the sink, for free, because two events with the
+  same key are the same map entry.
+- A [sink built on a store with no primary key](https://github.com/zanreal-labs/medusa-usage-tinybird)
+  can still offer the same guarantee, by enforcing uniqueness on read instead of
+  on write - see that package's docs for exactly how.
+- A host application can retry `POST /admin/usage/events` on any doubt about
+  whether the first call landed, with no coordination and no idempotency layer
+  of its own to build.
+
+None of that is a separate feature. It all falls out of one fact: the key means
+the event, so the event can only ever occupy one row.

@@ -1,0 +1,155 @@
+---
+title: Overview
+description: Metered usage for Medusa v2 - an append-only event log, deterministic deduplication, billing periods and rating, ending at a frozen number your application invoices.
+---
+
+`@zanreal/medusa-usage` is a Medusa v2 plugin for metered usage: record that a
+subject consumed some quantity of some meter, ask for a total over a window, and
+close a billing period into a frozen result you can still check in a year.
+
+Medusa has no metering of its own. Its [subscriptions
+recipe](https://docs.medusajs.com/resources/recipes/subscriptions) covers a fixed
+price on a fixed interval and says nothing about usage, and nothing on npm filled
+that gap - so this plugin is only that piece, and stops exactly where it ends.
+
+## Where it stops, on purpose
+
+The plugin's job ends at a sentence: "period P, for subject S, over `[from, to)`,
+rated to T, and here is the frozen breakdown that produced it." Turning that
+sentence into a document, a tax line, a payment or a dunning schedule is your
+application's decision, and it stays your application's decision forever - a
+metering plugin that started having opinions about invoicing would stop being
+usable by anyone whose invoices look different from the ones it imagined.
+
+The same is true of a rate. `unitAmount` and `includedUnits` live in your
+`medusa-config.ts`, not in this package's code, because the moment a metering
+library hardcodes what a unit is worth, it is only useful to the one deployment
+whose pricing matches.
+
+## The shape of it
+
+```text
+  your code                 this plugin                        your code
+  ---------                 -----------                        ---------
+  record(event)  ->  validate, derive key, buffer
+                              |
+                              |  batch (size or age)
+                              v
+                          sink.write()  ->  append-only event log
+                              |
+  aggregate(window) ->  sink.aggregate()  ->  immutable snapshot
+                              |
+  closePeriod(P)   ->  aggregate + rate + freeze  ->  stored result  ->  invoice it
+                              |
+                              +-> usage_period.closed  ->  your subscriber
+```
+
+Everything the plugin does follows from four commitments:
+
+1. **The log is append-only.** No row is ever updated or deleted. A total
+   computed this March and the same total recomputed in November come out
+   identical, because both are computed from the same rows rather than read off a
+   counter that remembers what somebody believed at the time.
+2. **A key is derived from what an event means, never generated.** The same
+   event, sent any number of times, occupies at most one row. This is the single
+   idea that makes the rest of the design possible: a retry, a redeploy or a
+   replayed message cannot turn into a second charge. See [Deduplication, in
+   full](./deduplication.en.mdx) - if you read one page here, read that one.
+3. **Ingestion is batched.** A round trip per event is not a cost this plugin is
+   willing to impose when the database sits across the internet, so `record`
+   buffers and writes in batches. See [Recording and reading
+   usage](./recording.en.mdx).
+4. **The sink is a provider**, the same way a fulfillment or notification
+   integration is a provider: where the log physically lives is an infrastructure
+   decision, named in `medusa-config.ts`, and this package ships one sink and a
+   contract for others. See [Sinks and configuration](./sinks.en.mdx).
+5. **A closed period is frozen.** Closing rates the usage once and writes the
+   answer as a row that is never touched again. See [Billing
+   periods](./billing.en.mdx).
+
+## Install
+
+This package is not on npm yet. It installs as a git dependency, pinned to a
+commit, the same way its own Tinybird sink depends on it internally:
+
+```jsonc title="package.json"
+{
+  "dependencies": {
+    "@zanreal/medusa-usage": "github:zanreal-labs/medusa-usage#2a260a4d04db6cc89986e0e9d25fcc2f60716b2f"
+  }
+}
+```
+
+Pin to the commit you tested against. There is no published tag yet, so `#main`
+would move under you on the next push to the repository; a pinned commit is the
+one spec that means the same thing tomorrow that it means today.
+
+The package compiles itself on install - `prepare` runs `medusa plugin:build`,
+which is what turns the checked-out source into the `.medusa/server` output its
+`exports` point at. pnpm 10 and newer refuse to run that script for a dependency
+it does not already trust, so a fresh install needs it allowed once, in your
+project's `pnpm-workspace.yaml`:
+
+```yaml title="pnpm-workspace.yaml"
+allowBuilds:
+  "@zanreal/medusa-usage@https://codeload.github.com/zanreal-labs/medusa-usage/tar.gz/2a260a4d04db6cc89986e0e9d25fcc2f60716b2f": true
+```
+
+The key is the exact tarball URL pnpm resolves the pinned commit to, which is why
+it carries the same SHA as the dependency line above - update both together when
+you move the pin. Then register the plugin:
+
+```ts title="medusa-config.ts"
+module.exports = defineConfig({
+  plugins: [
+    {
+      resolve: "@zanreal/medusa-usage",
+      options: {},
+    },
+  ],
+});
+```
+
+Empty `options` is a complete, working configuration. With nothing set, the
+plugin registers its built-in Postgres sink under the id `postgres` and writes
+into the database Medusa already has, so nothing external has to exist before you
+can record your first event. Then run the migration it ships:
+
+```bash
+npx medusa db:migrate
+```
+
+## Recording your first event
+
+```ts
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+
+await usage.record({
+  meter: "api_request",
+  subject: customer.id,
+  quantity: 1,
+});
+```
+
+That call validates the event, derives its key, and queues it - it does not wait
+for a database round trip, and calling it again with the same facts costs
+nothing, because the key is the same key. [Recording and reading
+usage](./recording.en.mdx) covers the workflow and HTTP forms, why there is no
+built-in subscriber mapping a Medusa event to a meter, and how a correction is
+expressed on a log that never allows an update.
+
+## Where to go next
+
+- **[Recording and reading usage](./recording.en.mdx)** - the three ways to
+  record an event, what `aggregate` and `listEvents` return, corrections, and why
+  `quantity` has to be a whole number.
+- **[Deduplication, in full](./deduplication.en.mdx)** - what an event's key is
+  derived from, the two forms it takes, and why that is what makes a retry free
+  instead of a double charge.
+- **[Billing periods](./billing.en.mdx)** - opening and closing a period, rating,
+  the frozen result, and what to do about an event that arrives after its period
+  closed.
+- **[Sinks and configuration](./sinks.en.mdx)** - the sink contract, every plugin
+  option, the admin API, and how to register a sink of your own.

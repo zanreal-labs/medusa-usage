@@ -1,0 +1,367 @@
+---
+title: Okresy rozliczeniowe
+description: "Otwieranie i zamykanie okresu, wycena zużycia względem skonfigurowanego cennika, zamrożony wynik, który wychodzi z zamknięcia, co się dzieje ze spóźnionym zdarzeniem i jak zamienić zamknięty okres w fakturę."
+---
+
+## Okres to podmiot i półotwarte okno, nic więcej
+
+```ts
+const okres = await usage.openPeriod({
+  subject: klient.id,
+  startsAt: new Date("2026-08-01T00:00:00Z"), // włącznie
+  endsAt: new Date("2026-09-01T00:00:00Z"),   // wyłącznie
+});
+```
+
+To cały model. To nie jest subskrypcja, nie niesie własnej ceny i nie wie, czym
+jest miesiąc - host rozliczający miesiące kalendarzowe otwiera jeden okres na
+miesiąc, a host rozliczający trzydzieści dni od rejestracji klienta otwiera
+takie właśnie okresy, i z punktu widzenia tej wtyczki to dokładnie ten sam
+obiekt.
+
+Okno jest w postaci `[start, koniec)`, tego samego półotwartego kształtu co
+każde inne okno w tej wtyczce, z tego samego powodu: kolejne okresy sklejają
+się bez nakładania, więc zdarzenie na granicy sierpnia i września jest
+rozliczone dokładnie raz, we wrześniu. Okno domknięte z obu stron rozliczyłoby
+je w obu miesiącach, co jest tym samym podwójnym obciążeniem, przed którym cały
+ten pakiet ma strukturalnie chronić.
+
+### Identyfikator jest wyprowadzony, tak jak klucz zdarzenia
+
+Identyfikator okresu to SHA-256 z jego podmiotu i dwóch chwil, a nie wartość
+generowana - więc otwarcie tego samego okresu dwa razy otwiera jeden okres, a
+druga próba jest operacją bez skutku, którą odrzuca sam klucz główny, a nie coś,
+co musiałby wykrywać kod aplikacji. Warto zapamiętać konsekwencję: granica
+przesunięta o jedną milisekundę to *inny* okres, z innym identyfikatorem, który
+można otworzyć i zamknąć zupełnie osobno od tego, którym prawie był. Generuj
+swoje granice deterministycznie - z reguły kalendarza, a nie z tego, co akurat
+zwróci `new Date()` w chwili, gdy uruchomi się zaplanowane zadanie - bo
+niedeterministyczna granica sprawia, że „ten sam okres” przestaje cokolwiek
+znaczyć.
+
+### Nic nie zamyka się samo
+
+Ten pakiet nie ma harmonogramu dla okresów i nie powinien go zdobyć: tylko ty
+wiesz, czy twój cykl rozliczeniowy to miesiące kalendarzowe, trzydzieści dni od
+rejestracji, czy coś, co twój dział finansowy wymyślił w zeszłym kwartale.
+Otwarcie okresu to stwierdzenie, że istnieje okno do zmierzenia. Zamknięcie go
+to decyzja, którą podejmuje twoja aplikacja, na własnym harmonogramie.
+
+### Subskrypcja jest darmowa, i z tego wynika cały model
+
+Nie ma tu ceny planu, opłaty bazowej, minimalnego zobowiązania ani proracji - i
+nie ma w kształcie okresu miejsca, żeby to gdziekolwiek umieścić. Opłata za
+okres to zużycie w jego wnętrzu, wycenione i zsumowane, i nic więcej. Klient,
+który w danym okresie niczego nie zużył, nie jest nic winien, i to wynika samo
+z arytmetyki, bez potrzeby specjalnego przypadku.
+
+Więc w tym modelu subskrypcja to tylko coś, co decyduje, kiedy okres się kończy.
+Sama w sobie nic nie kosztuje, a to, co kosztuje, to twoje dane, nigdy dane tego
+pakietu.
+
+## Wycena: zamiana zużycia w pieniądze
+
+Stawka to konfiguracja, ustawiana w `medusa-config.ts`, i nic z twoich
+liczników ani cen nie jest wkompilowane w ten pakiet:
+
+```ts
+options: {
+  billing: {
+    currency: "PLN",
+    rates: [
+      // 12 groszy za 10 000 żądań, pierwszy milion w każdym okresie gratis.
+      { meter: "api_request", unitAmount: 12, perUnits: 10_000, includedUnits: 1_000_000 },
+      // 5 groszy za gigabajt, od pierwszego.
+      { meter: "gb_egress", unitAmount: 5 },
+    ],
+  },
+}
+```
+
+Arytmetyka w całości, z `src/lib/billing/rating.ts`:
+
+```text
+chargeable = total <= 0 ? total : max(total - includedUnits, 0)
+amount     = trunc(chargeable * unitAmount / perUnits)
+```
+
+**Pieniądze to liczby całkowite najmniejszych jednostek**, z dokładnie tego
+samego powodu, dla którego liczby całkowite są ilościami: suma kwot
+zmiennoprzecinkowych zależy od kolejności dodawania składników, więc jeden
+okres mógłby wycenić się na dwie różne sumy w dwa różne dni, i obie byłyby
+równie obronne - a jedna z nich trafiłaby na fakturę. `unitAmount` to grosze,
+centy albo pensy, dokładnie tak, jak przyjmuje je każde API płatnicze na
+świecie.
+
+**Mnożenie i dzielenie są robione w `BigInt`**, więc iloczyn pośredni
+`chargeable * unitAmount` nie może przelać się w przybliżenie
+zmiennoprzecinkowe po drodze do dzielenia, które w innym wypadku
+zrekompensowałoby to z powrotem do dokładności. Kwota zbyt duża, żeby być
+bezpieczną liczbą całkowitą, jest wprost odrzucana, a nie zaokrąglana do czegoś,
+co tylko wygląda poprawnie.
+
+**`perUnits` to powód, dla którego stawka w ogóle ma mianownik.** Domyślnie
+wynosi 1, co pokrywa zwykłe „tyle za jednostkę”, jakim jest większość stawek.
+Istnieje, bo bez niego ten pakiet po cichu zakładałby o każdej cenie, że
+licznik jest wart co najmniej jedną całą najmniejszą jednostkę za sztukę
+zużycia. Licznik zliczający żądania API taki nie jest - wyceniony na setną
+grosza za żądanie, jedynymi alternatywami bez `perUnits` byłoby wymyślenie
+grubszego licznika zliczającego tysiące żądań (tracąc surową liczbę, po którą
+istnieje ścieżka audytu), albo wycenianie w ułamkach, czyli dokładnie to, czego
+ten pakiet nigdzie nie robi.
+
+**Dzielenie obcina w stronę zera**, więc wycena kredytu jest zawsze dokładnym
+odwróceniem wyceny obciążenia, które ten kredyt anuluje. Zaokrąglanie w dół
+zepsułoby tę symetrię, a korekta, która nie cofa dokładnie tego, co koryguje,
+jest gorsza niż brak korekty. Koszt to jedna odrzucona ułamkowa część
+najmniejszej jednostki na licznik na okres, zawsze na korzyść klienta przy
+obciążeniu - a ułamka grosza i tak nie dałoby się wystawić na fakturze.
+
+**Limit umarza zużycie; go nie tworzy.** Okres, którego suma netto jest ujemna
+- bo korekty przeważyły nad zużyciem w oknie - przechodzi bez zmian, zamiast
+zostać przycięty do zera przez limit, którego nigdy nie wykorzystał. Przycięcie
+w tym miejscu po cichu połknęłoby pieniądze, które klientowi się faktycznie
+należą.
+
+**Czego celowo tu nie ma:** progów, rabatów wolumenowych, nadpisań na podmiot
+albo na plan, stawek zależnych od wymiaru, przeliczania walut. Każde z nich to
+osobny, prawdziwy model cenowy, i żadnego nie da się zaprojektować pod produkty,
+które jeszcze nie istnieją - cennik kluczowany czymkolwiek poza licznikiem
+musiałby stać się małym językiem zapytań, a każdy host skonfigurowałby go
+odrobinę inaczej.
+
+Brak jakiegokolwiek bloku `billing` jest w pełni wspierany i oznacza, że
+wtyczka mierzy bez wyceniania czegokolwiek. Zapis, agregacja i listowanie
+zużycia są tym niedotknięte; odmawia tylko zamknięcie okresu, i odmawia **po
+nazwie**, a nie ciszej wyceniając wszystko na zero. Okres, który wyszedł na
+zero, bo nikt nie skonfigurował ceny, nie może nigdy wyglądać tak samo jak
+okres, w którym nic nie zużyto.
+
+## Zamrożony wynik
+
+```ts
+const { result, alreadyClosed } = await usage.closePeriod({ periodId: okres.id });
+```
+
+Każdy licznik z cennika jest agregowany w oknie okresu, wyceniany i zapisywany
+jako linia - **łącznie z licznikami, które wyszły na zero**, więc wynik
+dowodzi, że każdy z nich faktycznie sprawdzono, zamiast zostawiać cię z
+pytaniem, czy brakująca linia znaczy zerowe zużycie, czy zapomnianą stawkę.
+
+```jsonc
+{
+  "version": 1,
+  "periodId": "ubp_4ddb0a00...",
+  "subject": "cus_01",
+  "from": "2026-08-01T00:00:00.000Z",
+  "to": "2026-09-01T00:00:00.000Z",
+  "currency": "PLN",
+  "lines": [
+    {
+      "meter": "api_request",
+      "quantity": 1234567,
+      "eventCount": 1234567,
+      "firstOccurredAt": "2026-08-01T00:04:11.000Z",
+      "lastOccurredAt": "2026-08-31T23:51:07.000Z",
+      "usageDigest": "usnap_9f2c...",
+      "includedUnits": 1000000,
+      "unitAmount": 12,
+      "perUnits": 10000,
+      "chargeableQuantity": 234567,
+      "amount": 281,
+    },
+  ],
+  "total": 281,
+  "eventCount": 1234567,
+  "digest": "uper_dd025dc6...",
+  "sink": "postgres",
+  "closedAt": "2026-09-01T02:00:00.000Z",
+}
+```
+
+**Każda linia tłumaczy się sama.** Ilość, liczba zdarzeń, pierwsza i ostatnia
+chwila w oknie, zastosowana stawka i digest dokładnej migawki zużycia, z której
+została wyceniona. Pozycja na fakturze, której nikt nie potrafi uzasadnić, jest
+gorsza niż brak faktury, więc kwota nigdy tu się nie pojawia bez arytmetyki,
+która ją wyprodukowała, a arytmetyka nigdy bez wskaźnika prosto z powrotem do
+dziennika.
+
+**Jest zapisany, w przeciwieństwie do migawki zużycia.** Migawka to wartość,
+liczona na żądanie i przechowywana przez tego, kto o nią poprosił. Wynik to
+wiersz, zapisany dokładnie raz. W chwili, gdy liczba zostaje rozliczona,
+przestaje być pytaniem o dziennik, a staje się faktem o tym, co faktycznie
+naliczono - a te dwie rzeczy mogą się później rozjechać, przez spóźnione
+zdarzenie albo zmianę stawki. Więc wynik jest zamrażany w chwili zamknięcia i
+od tej pory odczytywany dosłownie. Buduj swoją fakturę z tego wiersza, nigdy z
+zapytania na żywo, bo zapytanie na żywo odpowiada „co dziennik mówi teraz”, a
+faktura potrzebuje „co faktycznie naliczyliśmy”.
+
+### Zamknięcie dwa razy nie oznacza podwójnej opłaty
+
+Wynik jest wstawiany pod własnym, wyprowadzonym identyfikatorem okresu, a
+wstawienie ignoruje konflikt - dokładnie ten sam wzorzec, którego deduplikacja
+używa dla zdarzeń:
+
+```sql
+insert into "usage_period_result" (...) values (...) on conflict ("id") do nothing returning "id"
+```
+
+Nic nie jest czytane przed tym zapisem, więc nie ma momentu, w którym mogłoby
+się wcisnąć ponowione zadanie albo drugi worker ścigający się z pierwszym.
+Pierwsze wywołanie, które faktycznie dotrze do bazy, dopisuje wiersz i zgłasza
+`alreadyClosed: false`. Każde kolejne nic nie dopisuje i zgłasza już zapisany
+wynik z `alreadyClosed: true` - tę samą, pierwszą odpowiedź, nawet jeśli
+dziennik od tamtej pory poszedł dalej.
+
+**`alreadyClosed` to jedyna flaga, po której warto oprzeć fakturę.** Nie może
+zgłosić `false` dwa razy dla tego samego okresu, co jest dokładnie tym, czego
+potrzebuje idempotentny krok fakturowania.
+
+Ta sama gwarancja dociera do twoich własnych subscriberów, bo zamknięcie przez
+workflow emituje `usage_period.closed` tylko przy wywołaniu, które faktycznie
+zamknęło okres:
+
+```ts
+import { closeBillingPeriodWorkflow } from "@zanreal/medusa-usage/workflows";
+
+await closeBillingPeriodWorkflow(container).run({ input: { periodId } });
+```
+
+Subscriber, który zamienia to zdarzenie w fakturę, nigdy więc nie musi
+deduplikować go po swojej stronie - po prostu nigdy nie jest wywołany dwa razy
+dla tego samego okresu.
+
+### Trzy stany, i dlaczego warto je odróżniać
+
+| Co widzisz | Co to znaczy | Co zrobić |
+| --- | --- | --- |
+| brak wyniku (`null`) | okres jeszcze nie jest zamknięty | nie rozliczaj go |
+| `total: 0`, `eventCount: 0` | zamknięty i dowodnie pusty | nie wystawiaj faktury |
+| `total: 0`, `eventCount > 0` | zamknięty, wszystko w granicach limitu | nie wystawiaj faktury |
+| `total > 0` | zamknięty, i tyle się należy | wystaw fakturę |
+| `total < 0` | korekty przeważyły nad zużyciem | twoja decyzja - zwykle nota kredytowa |
+
+Subskrypcja z darmowym progiem regularnie produkuje drugi i trzeci wiersz - to
+nie są przypadki brzegowe wymagające osobnej obsługi, a właściwa odpowiedź na
+oba to brak faktury, nie faktura na zero.
+
+### Weryfikacja po czasie
+
+```ts
+const sprawdzenie = await usage.verifyPeriod(periodId);
+// { matches: true, storedTotal: 281, recomputedTotal: 281, totalDelta: 0, lines: [...] }
+```
+
+Okres jest wyceniany ponownie z dziennika, przy użyciu dokładnie tej stawki,
+jaka jest zapisana na każdej zachowanej linii, a oba digesty są porównywane.
+`matches` jest prawdziwe, gdy dziennik za liczbą jest bajt w bajt tym samym
+dziennikiem, z którego rozliczono okres. Stawka użyta do ponownego wyliczenia
+to zawsze ta zapisana w chwili zamknięcia, nigdy dzisiejsza konfiguracja - co
+sprawia, że jest to sprawdzenie dziennika, a nie sprawdzenie pliku
+konfiguracyjnego. Podniesienie ceny nie może sprawić, że każdy miniony okres
+przestanie się weryfikować, a jej obniżenie nie może po cichu sprawić, że stara
+faktura zacznie wyglądać na błędną. `verifyPeriod` niczego nie zapisuje, cokolwiek
+znajdzie.
+
+## Okres zamknięty, a zdarzenia wciąż napływają
+
+Spóźnione zdarzenia to fakt systemów produkcyjnych, i odpowiedź tutaj jest
+decyzją, którą podejmuje ta wtyczka, a nie kwestią przypadku.
+
+**Zdarzenie, które przychodzi po zamknięciu swojego okresu, jest wciąż
+zapisywane, w okresie, w którym faktycznie wystąpiło, i niczego nie zmienia w
+tym, co zostało naliczone.** Dziennik je przyjmuje, bo dziennik przyjmuje
+wszystko i filtruje wyłącznie po `occurredAt`. Zamrożony wynik się nie rusza,
+bo liczba, która już trafiła na fakturę, nie może.
+
+Więc różnica między tym, co naliczono, a tym, co dziennik mówi teraz, wychodzi
+na jaw dokładnie w jednym miejscu: `verifyPeriod` przestaje się zgadzać i mówi,
+o ile, na każdy licznik osobno. To jest zamierzone zachowanie, nie sytuacja
+awaryjna. Co z tym zrobić, to decyzja biznesowa, której ten pakiet naprawdę nie
+może za ciebie podjąć - ale jest jeden kształt odpowiedzi, który utrzymuje
+dziennik uczciwym:
+
+**Przenieś różnicę do otwartego okresu, jako zużycie.** Zapisz korygujące
+zdarzenie z `occurredAt` wewnątrz aktualnie otwartego okna, wskazujące, co
+właśnie nadrabia:
+
+```ts
+await usage.record({
+  meter: "api_request",
+  subject: klient.id,
+  quantity: 4120,          // to, czego sierpniowi zabrakło
+  occurredAt: new Date(),  // wewnątrz września, który wciąż jest otwarty
+  properties: { late_for_period: zamknietyOkresId },
+});
+```
+
+Sierpniowa faktura stoi bez zmian, wrześniowa zawiera nadrobienie, a obie sumy
+są w każdej chwili odtwarzalne z dziennika. Otwarcie sierpnia na nowo
+oznaczałoby edycję czegoś, co klient już dostał - ten pakiet nie ma na to
+operacji i nie powinien jej zdobyć.
+
+**`closeDelayMs` ogranicza częstość tej sytuacji**, nie udając, że ją eliminuje.
+To dolna granica tego, kiedy okres można zamrozić, wyrażona w milisekundach po
+końcu okna:
+
+```ts
+billing: { currency: "PLN", closeDelayMs: 6 * 60 * 60 * 1000, rates: [...] }
+```
+
+Zero, wartość domyślna, pozwala zamknąć okres w chwili, gdy okno się kończy.
+Podnieś ją do tego, czego naprawdę potrzebuje twój najwolniejszy producent. To,
+jak bardzo spóźniony może być producent, jest własnością tego producenta i
+sinka pod nim, a nie tego pakietu, więc nie ma domyślnej wartości właściwej dla
+każdego wdrożenia - ale zamknięcie okresu o północy co do sekundy jest
+optymistyczne w każdym wdrożeniu, w którym działa więcej niż jeden proces
+buforujący zdarzenia, a wtyczka i tak już wprost odmawia zamknięcia okresu,
+którego okno jeszcze się nie skończyło.
+
+## Zamiana zamkniętego okresu na fakturę
+
+To jest miejsce, w którym pakiet się kończy, a zaczyna twoja aplikacja, i to
+celowo krótki kawałek kodu - nic z poniższego nie należy do tej wtyczki:
+
+```ts
+// src/subscribers/fakturuj-zamkniety-okres.ts
+import { PERIOD_CLOSED_EVENT } from "@zanreal/medusa-usage/workflows";
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+export default async function fakturujZamknietyOkres({ event, container }) {
+  const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+  const wynik = await usage.getPeriodResult(event.data.id);
+
+  // Darmowa subskrypcja bez zużycia nic nie jest winna, i nic właśnie dostaje.
+  if (!wynik || wynik.total === 0) {
+    return;
+  }
+
+  await twojaUslugaFakturowania.create({
+    customerId: wynik.subject,
+    currency: wynik.currency,
+    // Jedna linia faktury na licznik, opisana twoimi słowami, wyceniona naszymi.
+    lines: wynik.lines
+      .filter((line) => line.amount !== 0)
+      .map((line) => ({
+        description: opiszLicznik(line.meter, line),
+        quantity: line.chargeableQuantity,
+        unitAmount: line.unitAmount,
+        amount: line.amount,
+      })),
+    total: wynik.total,
+    // Zachowaj digest. To on udowadnia sumę za kilka miesięcy.
+    reference: { periodId: wynik.periodId, digest: wynik.digest },
+  });
+}
+
+export const config = { event: PERIOD_CLOSED_EVENT };
+```
+
+Wszystko, czego w tej funkcji brakuje, brakuje celowo: podatek, numeracja
+faktur, sam dokument, płatność, co się dzieje, gdy płatność zawiedzie, i jak
+się to wszystko nazywa w języku twojego klienta. Ten pakiet nie może niczego z
+tego wiedzieć, a pakiet, który by zgadywał, byłby błędny dla każdego wdrożenia
+poza tym jednym, dla którego akurat zgadł.
+
+Przechowaj `digest` obok tego, co z niego rozliczyłeś. To jeden napis, który
+zamienia „zaufaj nam, tyle zużyłeś” w „oto dziennik, sprawdź sam”.

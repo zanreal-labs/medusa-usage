@@ -1,0 +1,228 @@
+---
+title: Sinks and configuration
+description: The sink provider contract, every plugin option with its default, the admin API surface, the one environment variable, and how to write a sink of your own.
+---
+
+## The sink is a provider, the same shape as fulfillment or notification
+
+Where the event log physically lives is an infrastructure decision, not a
+business one. A store metering a few thousand events a month wants them in the
+Postgres it already runs. A store metering billions wants a column store built
+for exactly that. Both are metering the same thing, and neither should have to
+fork this plugin to say so - so the module owns the interface and the
+lifecycle, and the implementation is named in `medusa-config.ts`, exactly the
+way Medusa already handles a fulfillment or a notification provider.
+
+The contract, from `src/lib/sink/types.ts`, is three methods:
+
+```ts
+interface UsageSinkProvider {
+  write(events: readonly UsageEvent[]): Promise<UsageSinkWriteResult>;
+  aggregate(query: UsageAggregateQuery): Promise<UsageAggregateResult>;
+  listEvents(query: UsageListQuery): Promise<UsageEventPage>;
+}
+```
+
+and six guarantees an implementation has to hold, written out in full in that
+same file: append-only storage; at most one row per deduplication key; safe to
+retry a batch that failed partway through; filtering on event time
+(`occurredAt`) and never on ingestion time; exact summation, with no float in
+the accumulation path; and UTC throughout, with no implementation applying a
+local time zone anywhere. There is no update method and no delete method in the
+interface, and none should be added.
+
+The built-in Postgres sink, in `src/providers/postgres/`, is the reference
+implementation, and it is about two hundred lines - reading it is a faster way
+to understand the contract than reading about it. It gets its guarantee the
+direct way: the deduplication key **is** the row's primary key, so
+`INSERT ... ON CONFLICT DO NOTHING` makes a retried write a no-op inside a
+single atomic statement.
+
+[`@zanreal/medusa-usage-tinybird`](https://github.com/zanreal-labs/medusa-usage-tinybird)
+is the second sink, published as its own package precisely so that nothing in
+this one has to know what Tinybird is. It is worth reading even if you never
+install it: a column store has no primary key at all, so "at most one row per
+key" is not something the storage layer gives away for free, and that
+package's own docs set out exactly which half of the guarantee it rebuilds on
+the read path and which half stays eventual.
+
+## Writing a sink of your own
+
+```ts
+import { ModuleProvider } from "@medusajs/framework/utils";
+import { AbstractUsageSinkProviderService } from "@zanreal/medusa-usage/lib/sink/abstract-sink";
+
+class WarehouseUsageSink extends AbstractUsageSinkProviderService {
+  static identifier = "warehouse";
+
+  static validateOptions(options) {
+    if (!options.endpoint) {
+      throw new Error("the warehouse usage sink needs an `endpoint`");
+    }
+  }
+
+  constructor(container, options) {
+    super();
+    this.options = options;
+  }
+
+  async write(events) {
+    /* ... */
+  }
+  async aggregate(query) {
+    /* ... */
+  }
+  async listEvents(query) {
+    /* ... */
+  }
+}
+
+export default ModuleProvider("usage", { services: [WarehouseUsageSink] });
+```
+
+`AbstractUsageSinkProviderService` supplies the identifier plumbing and nothing
+else - the three methods above are the entire surface the module calls.
+`validateOptions` is called by Medusa's provider loader before the service is
+ever constructed, which is what turns a missing credential into a readable boot
+failure rather than a write that fails hours into a billing period.
+
+Then name it wherever the plugin is configured:
+
+```ts
+plugins: [
+  {
+    resolve: "@zanreal/medusa-usage",
+    options: {
+      providers: [
+        {
+          resolve: "@acme/medusa-usage-warehouse",
+          id: "warehouse",
+          options: { endpoint: process.env.WAREHOUSE_URL },
+        },
+      ],
+    },
+  },
+];
+```
+
+The `id` belongs to the host, not to the provider package. It is what the
+plugin's `sink` option selects on, what appears in every snapshot's `sink`
+field, and what a log line names - so two instances of the same provider
+package registered under different ids are two distinct sinks that never
+collide.
+
+## Every plugin option
+
+```ts
+{
+  resolve: "@zanreal/medusa-usage",
+  options: {
+    // Which sinks to register. Omit it entirely for the built-in Postgres sink
+    // under the id "postgres".
+    providers: [
+      { resolve: "@zanreal/medusa-usage/providers/postgres", id: "postgres" },
+    ],
+
+    // Which registered sink to write to, by id. Only needed with more than one:
+    // with a single sink there is nothing to disambiguate, and with several the
+    // plugin refuses to guess which log is the real one.
+    sink: "postgres",
+
+    // "buffered" (default) or "immediate".
+    flushMode: "buffered",
+
+    batchSize: 500,           // events per write, and the size flush trigger
+    flushIntervalMs: 5000,    // the age flush trigger
+    maxBufferedEvents: 10000, // ceiling before record applies back pressure
+    maxEventsPerCall: 1000,   // most events one record call may carry
+
+    // What usage is worth. Omit it entirely and the plugin meters without rating:
+    // everything except closing a period works exactly as it did before.
+    billing: {
+      // One currency for the whole card, because a period rates to one total and
+      // a total in two currencies is not a number. ISO 4217, carried onto every
+      // result and never resolved against anything.
+      currency: "PLN",
+
+      // How long after a period ends before it may be closed. Zero allows closing
+      // the moment the window is over.
+      closeDelayMs: 0,
+
+      rates: [
+        {
+          meter: "api_request",     // matched byte for byte against the recorded meter
+          unitAmount: 12,           // whole minor units, per `perUnits` of the meter
+          perUnits: 10_000,         // defaults to 1
+          includedUnits: 1_000_000, // forgiven each period, defaults to 0
+        },
+      ],
+    },
+  },
+}
+```
+
+Every option is validated at boot, in `src/lib/options.ts`. A plugin with
+nowhere to put events is not a quiet no-op - it would be silent data loss - so
+misconfiguration fails the boot with a readable message instead of disabling
+ingestion silently. See [Billing periods](./billing.en.mdx#rating-turning-usage-into-money)
+for what each field under `billing` does and why the arithmetic is shaped the
+way it is.
+
+## Environment variables
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `USAGE_FLUSH_CRON` | `* * * * *` | Schedule of the buffer flush job. |
+
+This one setting cannot live in `options` because Medusa evaluates a scheduled
+job's `config.schedule` at plugin-load time - before the container, and
+therefore this plugin's own options, exist. It is the same constraint that
+rules out a built-in event-to-meter subscriber, explained in
+[Recording and reading usage](./recording.en.mdx#why-there-is-no-built-in-subscriber-and-why-that-is-not-a-missing-feature).
+
+## The admin API
+
+Every route is under `/admin` and authenticated by Medusa's own default
+mechanism. A machine producer is a first-class caller here and uses an admin
+API key, which can be rotated and revoked - there is deliberately no
+unauthenticated ingestion route, because an unauthenticated way to write to a
+billing input is an unauthenticated way to change someone's bill.
+
+| Method | Path | What |
+| --- | --- | --- |
+| `GET` | `/admin/usage` | Sink, ingestion settings, buffer, last flush |
+| `POST` | `/admin/usage/events` | Record one event or a batch. 202. |
+| `GET` | `/admin/usage/events` | The events behind an aggregate, paged |
+| `GET` | `/admin/usage/aggregate` | A snapshot for one meter and window |
+| `GET` | `/admin/usage/periods` | Periods, newest first. Filter by subject, status, end |
+| `POST` | `/admin/usage/periods` | Open a period. Idempotent |
+| `GET` | `/admin/usage/periods/:id` | The period, and its frozen result if it has one |
+| `POST` | `/admin/usage/periods/:id/close` | Rate it and freeze it. Idempotent |
+| `GET` | `/admin/usage/periods/:id/verify` | Rate it again from the log and compare |
+
+`GET /admin/usage` is the first thing to check when a meter looks wrong. A
+rising `buffered` alongside a `last_flush_error` is a sink problem. A
+`buffered` of zero with no usage arriving is a producer problem. Its `rates`
+field is the configured rate card verbatim, or `null` when the plugin only
+meters without rating - which is the first thing to check when a period
+refuses to close.
+
+`POST /admin/usage/periods/:id/close` runs the same workflow described in
+[Billing periods](./billing.en.mdx#closing-twice-does-not-bill-twice), so a
+host's own subscribers hear about the close exactly once regardless of how many
+times the route itself is called.
+
+The listing route takes the query a billing run actually needs:
+`GET /admin/usage/periods?status=open&ended_before=<now>` is every period that
+is over and has not yet been billed.
+
+## Running more than one process
+
+Every sink guarantee above holds regardless of how many Medusa instances are
+writing to it - deduplication keys are global, so the sink keeps exactly one
+row per key no matter how many processes derived it. What does not
+automatically follow that is [buffering](./recording.en.mdx#why-ingestion-is-batched):
+each process buffers its own events, and `aggregate` can only flush the buffer
+of the process that happens to serve the request. `billing.closeDelayMs` is
+where you tell the plugin how long to wait past a window's end before closing
+it, for exactly this reason.

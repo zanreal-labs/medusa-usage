@@ -1,0 +1,230 @@
+---
+title: Sinki i konfiguracja
+description: "Kontrakt providera-sinka, każda opcja wtyczki wraz z wartością domyślną, powierzchnia API panelu, jedyna zmienna środowiskowa i jak napisać własny sink."
+---
+
+## Sink to provider, dokładnie tego samego kształtu co dostawa czy powiadomienia
+
+Gdzie fizycznie mieszka dziennik zdarzeń, to decyzja infrastrukturalna, nie
+biznesowa. Sklep mierzący kilka tysięcy zdarzeń miesięcznie chce je mieć w
+Postgresie, którego już używa. Sklep mierzący miliardy chce magazyn kolumnowy
+zbudowany dokładnie do tego. Oba mierzą to samo, i żaden nie powinien musieć
+forkować tej wtyczki, żeby to powiedzieć - więc moduł jest właścicielem
+interfejsu i cyklu życia, a implementacja jest nazwana w `medusa-config.ts`,
+dokładnie tak, jak Medusa już obsługuje providera dostawy albo powiadomień.
+
+Kontrakt, z `src/lib/sink/types.ts`, to trzy metody:
+
+```ts
+interface UsageSinkProvider {
+  write(events: readonly UsageEvent[]): Promise<UsageSinkWriteResult>;
+  aggregate(query: UsageAggregateQuery): Promise<UsageAggregateResult>;
+  listEvents(query: UsageListQuery): Promise<UsageEventPage>;
+}
+```
+
+oraz sześć gwarancji, jakie implementacja musi utrzymać, wypisanych w całości w
+tym samym pliku: przechowywanie tylko do dopisywania; najwyżej jeden wiersz na
+klucz deduplikacji; bezpieczeństwo ponowienia paczki, która zawiodła w
+połowie; filtrowanie po czasie zdarzenia (`occurredAt`), nigdy po czasie
+przyjęcia; dokładne sumowanie, bez żadnego floata w ścieżce akumulacji; i UTC
+wszędzie, bez implementacji stosującej gdziekolwiek strefę lokalną. W
+interfejsie nie ma metody aktualizacji ani usuwania, i żadna nie powinna zostać
+dodana.
+
+Wbudowany sink do Postgresa, w `src/providers/postgres/`, jest implementacją
+referencyjną i liczy sobie jakieś dwieście linii - przeczytanie go jest
+szybszym sposobem na zrozumienie kontraktu niż czytanie o nim. Swoją gwarancję
+zdobywa bezpośrednio: klucz deduplikacji **jest** kluczem głównym wiersza, więc
+`INSERT ... ON CONFLICT DO NOTHING` zamienia ponowiony zapis w operację bez
+skutku, w jednym atomowym poleceniu.
+
+[`@zanreal/medusa-usage-tinybird`](https://github.com/zanreal-labs/medusa-usage-tinybird)
+to drugi sink, opublikowany jako osobny pakiet właśnie po to, żeby nic w tym
+pakiecie nie musiało wiedzieć, czym jest Tinybird. Warto go przeczytać, nawet
+jeśli nigdy go nie zainstalujesz: magazyn kolumnowy nie ma w ogóle klucza
+głównego, więc „najwyżej jeden wiersz na klucz” nie jest czymś, co warstwa
+przechowywania daje za darmo, a dokumentacja tamtego pakietu opisuje dokładnie,
+którą połowę tej gwarancji odbudowuje przy odczycie, a która zostaje
+ewentualna.
+
+## Napisanie własnego sinka
+
+```ts
+import { ModuleProvider } from "@medusajs/framework/utils";
+import { AbstractUsageSinkProviderService } from "@zanreal/medusa-usage/lib/sink/abstract-sink";
+
+class MagazynUsageSink extends AbstractUsageSinkProviderService {
+  static identifier = "magazyn";
+
+  static validateOptions(options) {
+    if (!options.endpoint) {
+      throw new Error("sink magazynowy potrzebuje `endpoint`");
+    }
+  }
+
+  constructor(container, options) {
+    super();
+    this.options = options;
+  }
+
+  async write(events) {
+    /* ... */
+  }
+  async aggregate(query) {
+    /* ... */
+  }
+  async listEvents(query) {
+    /* ... */
+  }
+}
+
+export default ModuleProvider("usage", { services: [MagazynUsageSink] });
+```
+
+`AbstractUsageSinkProviderService` dostarcza obsługę identyfikatora i nic
+więcej - trzy metody powyżej to cała powierzchnia, jaką wywołuje moduł.
+`validateOptions` jest wywoływane przez loader providerów Medusy, zanim
+serwis zostanie w ogóle skonstruowany, co zamienia brakujący klucz dostępu w
+czytelną awarię przy starcie, a nie w zapis, który zawiedzie kilka godzin w
+środku okresu rozliczeniowego.
+
+Potem nazwij go tam, gdzie skonfigurowana jest wtyczka:
+
+```ts
+plugins: [
+  {
+    resolve: "@zanreal/medusa-usage",
+    options: {
+      providers: [
+        {
+          resolve: "@acme/medusa-usage-magazyn",
+          id: "magazyn",
+          options: { endpoint: process.env.MAGAZYN_URL },
+        },
+      ],
+    },
+  },
+];
+```
+
+`id` należy do hosta, nie do pakietu providera. To on jest tym, na co wskazuje
+opcja `sink` wtyczki, to on pojawia się w polu `sink` każdej migawki i to on
+nazywa się w logu - więc dwie instancje tego samego pakietu providera
+zarejestrowane pod różnymi identyfikatorami to dwa osobne sinki, które nigdy
+się nie zderzą.
+
+## Każda opcja wtyczki
+
+```ts
+{
+  resolve: "@zanreal/medusa-usage",
+  options: {
+    // Jakie sinki zarejestrować. Pomiń całkowicie dla wbudowanego sinka do
+    // Postgresa pod identyfikatorem "postgres".
+    providers: [
+      { resolve: "@zanreal/medusa-usage/providers/postgres", id: "postgres" },
+    ],
+
+    // Do którego zarejestrowanego sinka pisać, po id. Potrzebne tylko przy więcej
+    // niż jednym: przy jednym sinku nie ma czego rozróżniać, a przy kilku wtyczka
+    // odmawia zgadywania, który dziennik jest tym prawdziwym.
+    sink: "postgres",
+
+    // "buffered" (domyślnie) albo "immediate".
+    flushMode: "buffered",
+
+    batchSize: 500,           // zdarzeń na zapis, i próg zrzutu po rozmiarze
+    flushIntervalMs: 5000,    // próg zrzutu po wieku
+    maxBufferedEvents: 10000, // sufit, po którym record stosuje przeciwciśnienie
+    maxEventsPerCall: 1000,   // najwięcej zdarzeń, jakie może nieść jedno wywołanie record
+
+    // Ile jest warte zużycie. Pomiń całkowicie, a wtyczka będzie mierzyć bez
+    // wyceniania: wszystko poza zamknięciem okresu działa dokładnie tak jak wcześniej.
+    billing: {
+      // Jedna waluta na cały cennik, bo okres wycenia się do jednej sumy, a suma
+      // w dwóch walutach nie jest liczbą. ISO 4217, przenoszone na każdy wynik i
+      // nigdzie nie rozwiązywane.
+      currency: "PLN",
+
+      // Jak długo po końcu okresu można go zamknąć. Zero pozwala zamknąć w chwili,
+      // gdy okno się kończy.
+      closeDelayMs: 0,
+
+      rates: [
+        {
+          meter: "api_request",     // dopasowywane bajt w bajt do zapisanego licznika
+          unitAmount: 12,           // całe najmniejsze jednostki, za `perUnits` licznika
+          perUnits: 10_000,         // domyślnie 1
+          includedUnits: 1_000_000, // umarzane co okres, domyślnie 0
+        },
+      ],
+    },
+  },
+}
+```
+
+Każda opcja jest walidowana przy starcie, w `src/lib/options.ts`. Wtyczka bez
+miejsca na zdarzenia to nie cichy no-op - byłaby cichą utratą danych - więc zła
+konfiguracja przerywa start czytelnym komunikatem, zamiast po cichu wyłączyć
+przyjmowanie zdarzeń. Zobacz [Okresy rozliczeniowe](./billing.pl.mdx#wycena-zamiana-zużycia-w-pieniądze),
+co robi każde pole pod `billing` i dlaczego arytmetyka ma akurat taki kształt.
+
+## Zmienne środowiskowe
+
+| Zmienna | Domyślnie | Co robi |
+| --- | --- | --- |
+| `USAGE_FLUSH_CRON` | `* * * * *` | Harmonogram zadania zrzucającego bufor. |
+
+To jedno ustawienie nie może mieszkać w `options`, bo Medusa ewaluuje
+`config.schedule` zaplanowanego zadania w momencie ładowania wtyczki - zanim
+istnieje kontener, a więc zanim istnieją opcje tej wtyczki. To to samo
+ograniczenie, które wyklucza wbudowany subscriber mapujący zdarzenie na
+licznik, opisane w [Zapisie i odczycie zużycia](./recording.pl.mdx#dlaczego-nie-ma-wbudowanego-subscribera-i-dlaczego-to-nie-jest-brakująca-funkcja).
+
+## API panelu administracyjnego
+
+Każda trasa jest pod `/admin` i uwierzytelniona domyślnym mechanizmem Medusy.
+Producent-maszyna jest tu pełnoprawnym wywołującym i używa klucza API panelu,
+który można zrotować i unieważnić - celowo nie ma żadnej trasy przyjmującej
+dane bez autoryzacji, bo nieautoryzowany sposób na zapis do danych wejściowych
+rozliczenia to nieautoryzowany sposób na zmianę czyjegoś rachunku.
+
+| Metoda | Ścieżka | Co |
+| --- | --- | --- |
+| `GET` | `/admin/usage` | Sink, ustawienia zapisu, bufor, ostatni zrzut |
+| `POST` | `/admin/usage/events` | Zapisz jedno zdarzenie albo paczkę. 202. |
+| `GET` | `/admin/usage/events` | Zdarzenia stojące za agregatem, stronicowane |
+| `GET` | `/admin/usage/aggregate` | Migawka dla jednego licznika i okna |
+| `GET` | `/admin/usage/periods` | Okresy, od najnowszego. Filtr po podmiocie, statusie, końcu |
+| `POST` | `/admin/usage/periods` | Otwórz okres. Idempotentne |
+| `GET` | `/admin/usage/periods/:id` | Okres, i jego zamrożony wynik, jeśli już go ma |
+| `POST` | `/admin/usage/periods/:id/close` | Wyceń go i zamroź. Idempotentne |
+| `GET` | `/admin/usage/periods/:id/verify` | Wyceń go ponownie z dziennika i porównaj |
+
+`GET /admin/usage` to pierwsza rzecz do sprawdzenia, gdy licznik wygląda źle.
+Rosnące `buffered` obok `last_flush_error` to problem sinka. `buffered` równe
+zero przy braku napływającego zużycia to problem producenta. Jego pole `rates`
+to skonfigurowany cennik dosłownie, albo `null`, gdy wtyczka tylko mierzy bez
+wyceny - co jest pierwszą rzeczą do sprawdzenia, gdy okres odmawia zamknięcia.
+
+`POST /admin/usage/periods/:id/close` uruchamia ten sam workflow opisany w
+[Okresach rozliczeniowych](./billing.pl.mdx#zamknięcie-dwa-razy-nie-oznacza-podwójnej-opłaty),
+więc własne subscribery hosta słyszą o zamknięciu dokładnie raz, niezależnie od
+tego, ile razy sama trasa zostanie wywołana.
+
+Trasa listująca przyjmuje zapytanie, jakiego naprawdę potrzebuje bieg
+rozliczeniowy: `GET /admin/usage/periods?status=open&ended_before=<teraz>` to
+każdy okres, który się skończył i jeszcze nie został rozliczony.
+
+## Więcej niż jeden proces naraz
+
+Każda gwarancja sinka opisana powyżej trzyma się niezależnie od tego, ile
+instancji Medusy do niego pisze - klucze deduplikacji są globalne, więc sink
+trzyma dokładnie jeden wiersz na klucz, niezależnie od tego, ile procesów go
+wyliczyło. Tym, co automatycznie za tym nie idzie, jest
+[buforowanie](./recording.pl.mdx#dlaczego-zapis-jest-buforowany): każdy proces
+buforuje swoje własne zdarzenia, a `aggregate` potrafi zrzucić tylko bufor
+procesu, który akurat obsłużył żądanie. `billing.closeDelayMs` to miejsce, w
+którym mówisz wtyczce, jak długo czekać po końcu okna, zanim je zamknie -
+właśnie z tego powodu.
