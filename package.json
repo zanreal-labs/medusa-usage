@@ -22,6 +22,10 @@
     "type": "git",
     "url": "git+https://github.com/zanreal-labs/medusa-usage.git"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     ".medusa/server"
   ],
