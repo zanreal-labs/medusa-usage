@@ -1,0 +1,5 @@
+{
+  "title": "@zanreal/medusa-usage",
+  "description": "Rozliczanie zużycia dla Medusy v2: dziennik zdarzeń tylko do dopisywania, deterministyczna deduplikacja, okresy rozliczeniowe i wycena.",
+  "pages": ["index", "recording", "deduplication", "billing", "sinks"]
+}

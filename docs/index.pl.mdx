@@ -1,0 +1,162 @@
+---
+title: Wprowadzenie
+description: "Rozliczanie zużycia dla Medusy v2 - dziennik zdarzeń tylko do dopisywania, deterministyczna deduplikacja, okresy rozliczeniowe i wycena, kończące się zamrożonym wynikiem, który wystawiasz na fakturze."
+---
+
+`@zanreal/medusa-usage` to wtyczka do Medusy v2 do rozliczania zużycia: zapisujesz,
+że dany podmiot zużył pewną ilość danego licznika, pytasz o sumę w danym oknie
+czasowym, a na koniec zamykasz okres rozliczeniowy do zamrożonego wyniku, który
+możesz sprawdzić jeszcze za rok.
+
+Medusa sama z siebie nie liczy zużycia. Jej [przepis na
+subskrypcje](https://docs.medusajs.com/resources/recipes/subscriptions) obejmuje
+stałą cenę w stałym interwale i nic nie mówi o zużyciu, a na npmie nie było niczego,
+co by tę lukę wypełniało - więc ta wtyczka jest właśnie tym jednym brakującym
+elementem i na tym się kończy.
+
+## Gdzie się celowo kończy
+
+Zadanie wtyczki kończy się na zdaniu: „okres P, dla podmiotu S, w oknie
+`[od, do)`, wyceniony na T, a oto zamrożony rozkład, z którego to wynika”.
+Zamiana tego zdania w dokument, pozycję podatkową, płatność czy harmonogram
+przypomnień to decyzja twojej aplikacji i zostanie nią na zawsze - wtyczka do
+rozliczania zużycia, która zaczęłaby mieć zdanie na temat fakturowania, przestałaby
+się nadawać dla kogokolwiek, czyje faktury wyglądają inaczej niż te, które sobie
+wyobraziła.
+
+To samo dotyczy stawki. `unitAmount` i `includedUnits` mieszkają w twoim
+`medusa-config.ts`, a nie w kodzie tego pakietu, bo w chwili, gdy biblioteka do
+liczenia zużycia zaszywa w sobie, ile jest wart jeden zliczony egzemplarz, staje
+się użyteczna wyłącznie dla tego jednego wdrożenia, którego cennik akurat pasuje.
+
+## Jak to wygląda w praktyce
+
+```text
+  twój kod                  ta wtyczka                        twój kod
+  ---------                 -----------                       ---------
+  record(zdarzenie) ->  waliduje, wylicza klucz, buforuje
+                              |
+                              |  paczka (rozmiar lub wiek)
+                              v
+                          sink.write()  ->  dziennik tylko do dopisywania
+                              |
+  aggregate(okno)  ->  sink.aggregate()  ->  niezmienna migawka
+                              |
+  closePeriod(P)   ->  agreguj + wyceń + zamroź  ->  zapisany wynik  ->  fakturuj to
+                              |
+                              +-> usage_period.closed  ->  twój subscriber
+```
+
+Cała reszta wynika z pięciu decyzji projektowych:
+
+1. **Dziennik jest tylko do dopisywania.** Żaden wiersz nigdy nie jest
+   aktualizowany ani usuwany. Suma policzona w marcu i ta sama suma policzona
+   ponownie w listopadzie wychodzą identyczne, bo obie liczone są z tych samych
+   wierszy, a nie odczytane z licznika, który pamięta, co ktoś sądził w danej
+   chwili.
+2. **Klucz jest wyprowadzony z tego, co zdarzenie ZNACZY, a nie wygenerowany.**
+   To samo zdarzenie, wysłane dowolną liczbę razy, zajmuje najwyżej jeden
+   wiersz. To jedna myśl, z której wynika cała reszta projektu: ponowienie,
+   redeploy albo powtórzona wiadomość z kolejki nie zamieni się w drugie
+   obciążenie. Zobacz [Deduplikacja od podszewki](./deduplication.pl.mdx) - jeśli
+   masz przeczytać tu tylko jedną stronę, niech to będzie ta.
+3. **Zapis jest buforowany.** Ta wtyczka nie zgadza się płacić jednym zapytaniem
+   za każde pojedyncze zdarzenie, kiedy baza siedzi po drugiej stronie internetu,
+   więc `record` buforuje i zapisuje paczkami. Zobacz [Zapis i odczyt
+   zużycia](./recording.pl.mdx).
+4. **Sink to provider**, tak samo jak integracja z dostawą albo powiadomieniami
+   jest providerem: gdzie fizycznie mieszka dziennik, to decyzja
+   infrastrukturalna, nazwana w `medusa-config.ts`, a ten pakiet dostarcza jeden
+   sink i kontrakt na kolejne. Zobacz [Sinki i konfiguracja](./sinks.pl.mdx).
+5. **Zamknięty okres jest zamrożony.** Zamknięcie wycenia zużycie raz i zapisuje
+   odpowiedź jako wiersz, którego już nikt nie dotyka. Zobacz [Okresy
+   rozliczeniowe](./billing.pl.mdx).
+
+## Instalacja
+
+Tego pakietu jeszcze nie ma na npmie. Instaluje się jako zależność gitowa,
+przypięta do konkretnego commitu - dokładnie tak, jak jego własny sink do
+Tinybirda deklaruje go u siebie:
+
+```jsonc title="package.json"
+{
+  "dependencies": {
+    "@zanreal/medusa-usage": "github:zanreal-labs/medusa-usage#2a260a4d04db6cc89986e0e9d25fcc2f60716b2f"
+  }
+}
+```
+
+Przypnij do commitu, na którym testowałeś. Nie ma jeszcze opublikowanego tagu,
+więc `#main` przesunąłby się pod tobą przy następnym pushu do repozytorium -
+przypięty commit to jedyny zapis, który znaczy jutro to samo co dzisiaj.
+
+Pakiet buduje się sam przy instalacji - `prepare` odpala `medusa plugin:build`,
+co zamienia pobrane źródła w katalog `.medusa/server`, na który wskazuje jego
+`exports`. pnpm 10 i nowsze domyślnie odmawiają uruchomienia takiego skryptu dla
+zależności, której jeszcze nie ufają, więc świeża instalacja wymaga jednorazowego
+dopuszczenia go w `pnpm-workspace.yaml` twojego projektu:
+
+```yaml title="pnpm-workspace.yaml"
+allowBuilds:
+  "@zanreal/medusa-usage@https://codeload.github.com/zanreal-labs/medusa-usage/tar.gz/2a260a4d04db6cc89986e0e9d25fcc2f60716b2f": true
+```
+
+Klucz to dokładny adres archiwum, na który pnpm rozwiązuje przypięty commit,
+dlatego niesie ten sam SHA co linia zależności powyżej - przesuwając pin,
+aktualizuj oba miejsca naraz. Potem zarejestruj wtyczkę:
+
+```ts title="medusa-config.ts"
+module.exports = defineConfig({
+  plugins: [
+    {
+      resolve: "@zanreal/medusa-usage",
+      options: {},
+    },
+  ],
+});
+```
+
+Puste `options` to kompletna, działająca konfiguracja. Bez żadnych ustawień
+wtyczka rejestruje wbudowany sink do Postgresa pod identyfikatorem `postgres` i
+pisze do bazy, którą Medusa już ma - więc zanim zapiszesz pierwsze zdarzenie, nie
+musi istnieć nic zewnętrznego. Potem uruchom migrację, którą pakiet ze sobą
+niesie:
+
+```bash
+npx medusa db:migrate
+```
+
+## Pierwsze zdarzenie
+
+```ts
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+
+await usage.record({
+  meter: "wysylka_sms",
+  subject: klient.id,
+  quantity: 1,
+});
+```
+
+To wywołanie waliduje zdarzenie, wylicza jego klucz i wstawia je do kolejki - nie
+czeka na zapytanie do bazy, a ponowne wywołanie z tymi samymi faktami nic nie
+kosztuje, bo klucz wychodzi identyczny. [Zapis i odczyt
+zużycia](./recording.pl.mdx) opisuje formę workflow i HTTP, tłumaczy, dlaczego
+nie ma wbudowanego subscribera mapującego zdarzenie Medusy na licznik, i jak
+wyraża się korektę w dzienniku, który nie pozwala na aktualizację.
+
+## Co dalej
+
+- **[Zapis i odczyt zużycia](./recording.pl.mdx)** - trzy sposoby na zapisanie
+  zdarzenia, co zwracają `aggregate` i `listEvents`, korekty i dlaczego
+  `quantity` musi być liczbą całkowitą.
+- **[Deduplikacja od podszewki](./deduplication.pl.mdx)** - z czego wyprowadzany
+  jest klucz zdarzenia, dwie jego postaci i dlaczego to właśnie dzięki temu
+  ponowienie jest darmowe zamiast być podwójnym obciążeniem.
+- **[Okresy rozliczeniowe](./billing.pl.mdx)** - otwieranie i zamykanie okresu,
+  wycena, zamrożony wynik oraz co zrobić ze zdarzeniem, które przychodzi po
+  zamknięciu jego okresu.
+- **[Sinki i konfiguracja](./sinks.pl.mdx)** - kontrakt sinka, każda opcja
+  wtyczki, API panelu administracyjnego i jak zarejestrować własny sink.

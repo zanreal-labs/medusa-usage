@@ -1,0 +1,185 @@
+---
+title: Deduplikacja od podszewki
+description: "Jak klucz zdarzenia wynika z tego, co ono znaczy, a nie jest losowany, jakie ma dwie postacie i dlaczego dzięki temu ponowienie jest darmowe, a nie podwójnym obciążeniem."
+---
+
+Gdybyś miał zapamiętać z tego pakietu jedną rzecz, niech to będzie ta strona.
+Kontrakt sinka, bufor, okresy rozliczeniowe - wszystko to jest zbudowane, żeby
+chronić własność opisaną tutaj, a nie na odwrót.
+
+## Asymetria, od której wszystko się zaczyna
+
+Zużycie policzone podwójnie jest gorsze niż zużycie, które gdzieś zginęło. Za
+niska suma jest widoczna - wygląda podejrzanie i ktoś, kto patrzy na liczby,
+to zauważy. Za wysoka suma cicho zamienia się w fakturę, a nikt się o tym nie
+dowiaduje, dopóki klient jej nie zakwestionuje - a wtedy pieniądze już dawno
+zmieniły właściciela. Każda reguła poniżej istnieje po to, żeby ten drugi
+scenariusz był strukturalnie niemożliwy, a nie tylko mało prawdopodobny.
+
+## Klucz jest czystą funkcją tego, co zdarzenie znaczy
+
+`dedupeKeyFor` w `src/lib/usage/dedupe.ts` liczy SHA-256 z faktów samego
+zdarzenia i niczego więcej. Żadnych losowych bajtów, żadnego `Date.now()`,
+żadnego identyfikatora procesu, nazwy hosta, licznika, kolejności przyjścia ani
+sekwencji z bazy danych. Wywołaj to dwa razy z tymi samymi faktami, na dwóch
+różnych maszynach, w dwóch różnych latach - wynik będzie identyczny za każdym
+razem.
+
+Ta jedna własność zamienia trzy zwykłe awarie w zdarzenia bez znaczenia:
+
+- **ponowienie**, bo połączenie HTTP klienta wygasło na żądaniu, które w
+  rzeczywistości po stronie serwera już się powiodło;
+- **redeploy albo crash**, który odtwarza kolejkę, niepotwierdzoną wiadomość
+  albo webhook, który twoja infrastruktura wysyła ponownie, dopóki jej się nie
+  powie inaczej;
+- **backfill puszczony dwa razy** przez operatora, który nie był pewien, czy
+  pierwszy przebieg się dokończył.
+
+Każda z tych sytuacji wylicza identyczny klucz, a dopisanie staje się operacją
+bez skutku, bo sink ma w kontrakcie, że trzyma najwyżej jeden wiersz na klucz.
+Ponowienie nie jest tu tylko tolerowane - jest właściwą reakcją na jakąkolwiek
+wątpliwość, czy wywołanie doszło, a klucz deduplikacji jest tym, co to
+gwarantuje.
+
+## Klucz jest jednocześnie kluczem głównym
+
+`dedupeKeyFor` zwraca napis z prefiksem `uev_`, i to właśnie ten napis jest
+kluczem głównym wiersza w sinku, a nie wartością, którą sink dodatkowo
+indeksuje osobno. Ta różnica ma większe znaczenie, niż mogłoby się wydawać:
+oznacza, że deduplikację wymusza sam mechanizm unikalności silnika bazy, a nie
+kod aplikacji, który najpierw czyta, a potem pisze.
+
+Sprawdzenie typu „przeczytaj, a potem zapisz” ma w sobie lukę - między
+odczytem a zapisem inny proces może wstawić dokładnie ten wiersz, którego
+sprawdzenie przed chwilą nie znalazło - a zamknięcie tej luki zwykle wymaga
+blokady, transakcji albo pogodzenia się z wyścigiem. Zrobienie z klucza
+deduplikacji klucza głównego usuwa lukę, zamiast ją pilnować: `INSERT ... ON
+CONFLICT DO NOTHING` albo wstawia wiersz, albo nie, atomowo, i między tymi
+dwoma stanami nie ma momentu, w którym mógłby się wcisnąć drugi zapis.
+
+## Dwie postacie, bo klucz potrzebuje dwóch różnych rodzajów wsadu
+
+### Jawna
+
+Podaj `idempotencyKey`, kiedy masz już naturalną tożsamość dla tego, co
+mierzysz - identyfikator żądania, zdarzenia z systemu źródłowego albo wiersza,
+który importujesz:
+
+```text
+sha256( "usg1" US "explicit" US meter US subject US idempotencyKey )
+```
+
+Jest ograniczona do pary `(meter, subject)`, a nie brana sama w sobie, i to nie
+jest przypadek. Wywołujący, który mierzy jednocześnie `tokeny_wejsciowe` i
+`tokeny_wyjsciowe` dla tego samego identyfikatora żądania, potrzebuje dwóch
+wierszy, nie jednego - a bez tego ograniczenia druga rejestracja wyliczyłaby
+ten sam klucz co pierwsza i po cichu zniknęłaby w gałęzi sinka „to już mam”.
+Przypisanie jawnego klucza do poziomu, na którym faktycznie odbywa się
+agregacja (licznik, dla podmiotu), sprawia, że tej pomyłki po prostu nie da się
+popełnić, a nie tylko że jest opisana jako niewskazana.
+
+### Wyprowadzona
+
+Pomiń `idempotencyKey`, a klucz powstanie z pełnego stwierdzenia faktu:
+
+```text
+sha256( "usg1" US "derived" US meter US subject US occurredAt US quantity US source US properties )
+```
+
+gdzie `US` to znak ASCII unit separator, U+001F. `occurredAt` jest zapisany jako
+chwila ISO 8601 z dokładnością do milisekundy w UTC, więc klucz nie zależy od
+tego, w jakiej strefie czasowej akurat działa proces zapisujący. `quantity` to
+liczba całkowita dziesiętna. `properties` to kanoniczny JSON - klucze
+posortowane, bez przypadkowych spacji - co jest tym, co nie pozwala, żeby
+`{"a":1,"b":2}` i `{"b":2,"a":1}` wyliczyły różne klucze dla tego samego,
+oczywiście identycznego, zdarzenia.
+
+## Co czyni samo złączenie bezpiecznym
+
+Złączenie pól separatorem jest injektywnym kodowaniem tych pól tylko wtedy, gdy
+żadne z nich nie może zawierać tego separatora - w przeciwnym razie dwie różne
+krotki pól mogłyby złączyć się w ten sam napis, a dwa faktycznie różne
+zdarzenia zapadłyby się w jeden klucz. `meter`, `subject`, `source` i jawny
+klucz są w `src/lib/usage/event.ts` walidowane pod kątem braku jakichkolwiek
+znaków kontrolnych, co wyklucza U+001F razem z całą resztą tego zakresu.
+Złączenie jest więc bezpieczne z konstrukcji, a nie z umowy dżentelmeńskiej.
+
+Dwa mniejsze szczegóły warto znać, bo łatwo je pominąć, odtwarzając ten schemat
+gdzie indziej:
+
+- **Brak paczki właściwości i pusta paczka właściwości hashują się
+  identycznie.** `{}` i `undefined` opisują to samo zdarzenie - nie zapisano
+  żadnych wymiarów - więc `normalizeUsageEvent` zwija pusty obiekt do `null`,
+  zanim cokolwiek zostanie zahashowane. Bez tego zwinięcia biblioteka klienta,
+  która zawsze wysyła `{}`, i taka, która pomija to pole całkowicie,
+  wyliczyłyby różne klucze dla tego samego faktu.
+- **`explicit` i `derived` to osobne przestrzenie wewnątrz hashowanego
+  tekstu.** Poprzedzenie materiału informacją, który schemat go wyprodukował,
+  sprawia, że te dwie przestrzenie nie mogą się zderzyć nawet teoretycznie -
+  jawny klucz i przypadkowo pasująca krotka wyprowadzona nigdy nie wylądują na
+  tym samym hashu.
+
+## Co kosztuje postać wyprowadzona, powiedziane wprost
+
+Dwa zdarzenia, które są naprawdę różne, ale identyczne w każdym polu, jakie
+czyta klucz wyprowadzony - łącznie z milisekundą - zapadają się w jeden
+wiersz. To realne niedoliczenie, i to jest ta świadoma strona asymetrii, od
+której zaczyna się ta strona: schemat woli policzyć za mało niż policzyć
+podwójnie.
+
+Jeśli twój producent naprawdę potrafi wyemitować dwa takie zdarzenia - kilka
+jednostek tego samego licznika, dla tego samego podmiotu, w tej samej
+milisekundzie, bez niczego, co by je odróżniało - masz trzy wyjścia, a wtyczka
+nie wybierze żadnego za ciebie:
+
+1. Podaj jawny `idempotencyKey` (zwykle to jest właściwa odpowiedź, jeśli taki
+   klucz w ogóle istnieje).
+2. Zrób zdarzenia rozróżnialnymi, dokładając numer porządkowy w `properties`.
+3. Połącz je w jedno zdarzenie z większym `quantity` - co, w większości
+   przypadków, gdy ten temat w ogóle wypływa, i tak było pierwotną
+   intencją.
+
+## Wersjonowanie samego schematu
+
+Literał `usg1` jest pierwszą rzeczą hashowaną, w obu postaciach. Przypina on
+dokładnie tę derywację. Gdyby powyższe reguły kiedykolwiek się zmieniły - nowe
+pole dołączyło do krotki wyprowadzonej albo zmienił się separator - prefiks
+wersji zmieniłby się razem z nimi, więc te dwa schematy nigdy się nie zderzą, a
+każdy już zapisany wiersz zachowuje klucz, z jakim został napisany. Nic w
+deduplikacji nigdy nie przehashowuje istniejących wierszy - przehashowanie
+dziennika jest nieodróżnialne od jego przepisania, a przepisanie dziennika
+tylko-do-dopisywania niweczy sam powód, dla którego jest tylko do dopisywania.
+
+Cztery wektory poniżej są przypięte w `src/lib/usage/dedupe.test.ts` i są
+faktycznym kontraktem, a nie jego dokumentacją:
+
+```ts
+sha256("usg1\x1Fexplicit\x1Fapi_request\x1Fcus_1\x1Freq_1")
+sha256("usg1\x1Fderived\x1Fapi_request\x1Fcus_1\x1F2026-01-01T00:00:00.000Z\x1F1\x1F\x1Fnull")
+```
+
+Przesunięcie ich oznaczałoby, że każdy klucz siedzący już w produkcyjnym
+dzienniku przestaje pasować do klucza, jaki to samo zdarzenie wylicza dzisiaj -
+i każde z tych zdarzeń zostałoby policzone jeszcze raz przy następnym
+przyjściu.
+
+## Co to konkretnie daje
+
+Kiedy klucz jest wyprowadzony, a nie wygenerowany, każda warstwa nad nim może
+być naiwna wobec ponowień zamiast musieć być wobec nich ostrożna:
+
+- `record` można wywołać z tym samym zdarzeniem dwa razy, z dwóch różnych
+  procesów, a dziennik zyskuje jeden wiersz.
+- [Bufor przyjęciowy](./recording.pl.mdx#dlaczego-zapis-jest-buforowany) potrafi
+  zdeduplikować falę zdarzeń, zanim w ogóle dotrą do sinka, za darmo - bo dwa
+  zdarzenia o tym samym kluczu to ten sam wpis w mapie.
+- [Sink zbudowany na magazynie bez klucza
+  głównego](https://github.com/zanreal-labs/medusa-usage-tinybird) może
+  oferować tę samą gwarancję, wymuszając unikalność przy odczycie zamiast przy
+  zapisie - dokumentacja tamtego pakietu opisuje dokładnie jak.
+- Aplikacja hostująca może ponowić `POST /admin/usage/events` przy
+  jakiejkolwiek wątpliwości, czy pierwsze wywołanie doszło, bez żadnej
+  koordynacji i bez budowania własnej warstwy idempotencji.
+
+Nic z tego nie jest osobną funkcją. Wszystko wynika z jednego faktu: klucz
+znaczy zdarzenie, więc zdarzenie może zająć tylko jeden wiersz.

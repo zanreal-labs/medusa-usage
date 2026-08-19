@@ -1,0 +1,290 @@
+---
+title: Zapis i odczyt zużycia
+description: "Trzy sposoby na zapisanie zdarzenia, dlaczego quantity musi być liczbą całkowitą, dlaczego zapis jest buforowany, okna półotwarte, odczyt agregatu i jak działa korekta w dzienniku, który nie pozwala na aktualizację."
+---
+
+## Trzy drogi do środka
+
+### Z wnętrza kontenera
+
+```ts
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+
+await usage.record({
+  meter: "wysylka_sms", // co zostało zużyte
+  subject: klient.id,   // kto to zużył, jako nieprzezroczysty identyfikator, którego ta wtyczka nigdy nie rozwiązuje
+  quantity: 1,           // ile, jako liczba całkowita najmniejszej jednostki tego licznika
+});
+```
+
+### Z workflow, subscribera albo route'a
+
+```ts
+import { recordUsageWorkflow } from "@zanreal/medusa-usage/workflows";
+
+await recordUsageWorkflow(container).run({
+  input: {
+    events: [
+      {
+        meter: "transfer_mb",
+        subject: subskrypcjaId,
+        quantity: 734_000_000, // bajty, nie megabajty - patrz niżej
+        occurredAt: transfer.zakonczonoO,
+        source: "brama-cdn",
+        properties: { region: "eu-central" },
+        idempotencyKey: transfer.id, // preferowany, ilekroć taki istnieje
+      },
+    ],
+  },
+});
+```
+
+Ten workflow nie ma kroku kompensującego, i to nie jest przeoczenie. Dziennik
+jest tylko do dopisywania, więc nie ma operacji, która usuwa zdarzenie zużycia,
+żeby dało się je czymś cofnąć, a dodanie takiej operacji działałoby wprost
+przeciw tej samej własności, dla której ta wtyczka istnieje. Nic na tym nie
+tracisz: krok jest bezpieczny do ponowienia od zera, bo klucz jest wyprowadzony,
+więc workflow ponowiony po tym, jak zawiódł kolejny krok, zapisze to samo
+zużycie raz, a nie dwa razy.
+
+### Przez HTTP, dla producenta spoza tej Medusy
+
+```bash
+curl -X POST https://twoj-sklep/admin/usage/events \
+  -H "x-medusa-access-token: $ADMIN_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"events":[{"meter":"wysylka_sms","subject":"cus_01","quantity":1}]}'
+```
+
+`POST /admin/usage/events` odpowiada `202`, nie `201`: w domyślnym trybie
+buforowanym zdarzenia są przyjęte i wstawione do kolejki, jeszcze nie zapisane,
+a pole `written` w odpowiedzi mówi, co się faktycznie stało. Trasa przyjmuje też
+pojedyncze zdarzenie jako całe ciało żądania, dla producenta, który mierzy jedną
+rzecz na żądanie i nie powinien musieć owijać jej w tablicę.
+
+Odpowiedź niesie wyprowadzony klucz każdego zdarzenia, i to jest cały powód, dla
+którego klient w ogóle może to wywołanie ponowić: to samo ciało żądania daje te
+same klucze, więc klient, który ponowił połączenie po przekroczeniu czasu,
+dostaje z powrotem identyczne klucze, a dziennik nic na tym nie zyskuje po raz
+drugi.
+
+Każda trasa pod `/admin` korzysta z własnego uwierzytelniania Medusy, i celowo
+nie ma żadnej trasy przyjmującej zdarzenia bez autoryzacji. Producent-maszyna
+jest tu pełnoprawnym wywołującym i używa klucza API panelu, który można
+zrotować i unieważnić - nieautoryzowany sposób na zapis do danych wejściowych
+rozliczenia byłby nieautoryzowanym sposobem na zmianę czyjegoś rachunku.
+
+## Dlaczego nie ma wbudowanego subscribera, i dlaczego to nie jest brakująca funkcja
+
+Oczywistym udogodnieniem byłoby „zmapuj zdarzenie X Medusy na zdarzenie zużycia
+Y w konfiguracji”. Nie da się tego zbudować, i to z powodu leżącego w sposobie,
+w jaki Medusa ładuje subscribery, a nie w ograniczeniach tej wtyczki: Medusa
+wiąże zdarzenia subscribera ze statycznego eksportu `config`, ewaluowanego w
+momencie ładowania wtyczki - zanim istnieje kontener, a więc zanim istnieją
+opcje tej wtyczki. Subscriber nie ma jak dowiedzieć się z konfiguracji, jakich
+zdarzeń słuchać, bo w chwili wiązania konfiguracji jeszcze po prostu nie ma.
+
+Więc to mapowanie mieszka w twoim projekcie, gdzie zajmuje trzy linijki i gdzie
+zresztą jego miejsce - tylko ty wiesz, co zamówienie albo przesyłka znaczy w
+jednostkach twoich własnych liczników:
+
+```ts
+// src/subscribers/policz-dostawy.ts
+export default async function policzDostawy({ event, container }) {
+  await recordUsageWorkflow(container).run({
+    input: {
+      events: [
+        {
+          idempotencyKey: event.data.id,
+          meter: "dostawa",
+          quantity: 1,
+          subject: event.data.customer_id,
+        },
+      ],
+    },
+  });
+}
+
+export const config = { event: "delivery.completed" };
+```
+
+## Dlaczego `quantity` musi być liczbą całkowitą
+
+`quantity` jest walidowane jako bezpieczna liczba całkowita JavaScriptu, i to
+jest kwestia arytmetyki, nie stylu. Suma liczb zmiennoprzecinkowych zależy od
+kolejności, w jakiej dodawane są składniki - `0.1 + 0.2` w IEEE 754 nie wychodzi
+`0.3`, i żadna inna suma dziesiętnych nie ma gwarancji, że zachowa się tak, jak
+zwykła arytmetyka na papierze. Konsekwencja dla dziennika zużycia jest
+konkretna: ten sam zbiór zdarzeń, zsumowany w innej kolejności tylko dlatego,
+że sink akurat zwrócił wiersze w innej sekwencji, mógłby dać dwie różne sumy w
+dwa różne dni, i obie byłyby równie obronne jako „suma tych wierszy”. Cena
+policzona z takiej liczby nie jest obronna wcale.
+
+Jeśli to, co mierzysz, jest z natury ułamkowe, zmierz mniejszą jednostkę zamiast
+większej ułamkowej - bajty zamiast megabajtów, milisekundy zamiast godzin,
+tysięczne kredytu zamiast kredytów - i zapisuj całkowitą liczbę tych mniejszych
+jednostek. Przelicz na jednostkę, którą czyta człowiek, dopiero w miejscu, gdzie
+decydujesz, ile jest to warte - czyli w swoim kodzie, nie w tym pakiecie: ten
+pakiet nigdy nie widzi „2,4 megabajta”, tylko tyle bajtów, ile zdecydowałeś się
+zgłosić.
+
+Wbudowany sink do Postgresa przechowuje `quantity` jako `numeric` i sumuje je w
+bazie danych, co jest dokładne przy dowolnym rozmiarze, jaki kolumna pomieści.
+Odczyt sumy z powrotem aktywnie odmawia odpowiedzi, zamiast po cichu ją
+zaokrąglić, kiedy suma przekroczyłaby `2^53` - punkt, za którym liczba
+JavaScriptu przestaje reprezentować każdą liczbę całkowitą. Przybliżona liczba,
+która trafia do wyceny, to dokładnie ta awaria, przed którą cały ten pakiet ma
+chronić, więc jest odrzucana, zamiast zostać zwrócona tak, jakby była
+wiarygodna.
+
+## Dlaczego zapis jest buforowany
+
+`record` waliduje zdarzenie, wylicza jego klucz, wstawia je do bufora i wraca -
+nie czeka na potwierdzenie od sinka. Paczka wychodzi do sinka, kiedy bufor się
+zapełni (`batchSize`, domyślnie 500 zdarzeń) albo kiedy najstarsze czekające w
+nim zdarzenie osiągnie `flushIntervalMs` (domyślnie 5 sekund) - co nastąpi
+pierwsze.
+
+To nie jest mikrooptymalizacja, tylko realia wdrożenia: instancja Medusy
+gadająca z zarządzanym Postgresem przez internet płaci realne milisekundy
+opóźnienia za każde zapytanie, a jedno zapytanie na każde pojedyncze zdarzenie
+zużycia narzuca sufit tego, ile w ogóle da się zmierzyć - i ten sufit nie ma nic
+wspólnego z tym, ile faktycznie masz ruchu.
+
+**Koszt, powiedziany równie wprost jak korzyść.** Zdarzenia czekające w buforze
+żyją wyłącznie w pamięci. `SIGKILL` je gubi. Ta ekspozycja jest ograniczona
+przez trzy rzeczy działające razem - interwał zrzutu, rozmiar paczki i zrzut
+przy eleganckim zatrzymaniu procesu - i celuje w bezpieczną stronę asymetrii, na
+której ta wtyczka jest zbudowana: utrata kilku sekund zużycia to widocznie mała
+liczba, nigdy ciche podwójne obciążenie. Jeśli nawet taka ograniczona strata
+jest nie do przyjęcia dla tego, co mierzysz, ustaw `flushMode: "immediate"` i
+płać zapytaniem przy każdym wywołaniu.
+
+Dwie kolejne własności bufora warto znać:
+
+- **Przeciwciśnienie, nigdy porzucanie.** Po osiągnięciu `maxBufferedEvents`
+  (domyślnie 10 000), `record` zaczyna czekać na zrzut, zamiast dalej
+  powiększać bufor. Jeśli ten zrzut zawiedzie, błąd dociera do wywołującego,
+  który może bezpiecznie ponowić - bo klucz jest wyprowadzony i ponowienie nie
+  może policzyć podwójnie.
+- **Nieudana paczka wraca na początek kolejki**, przed wszystkim, co przyjęto
+  od tego czasu, więc sink, który się uporczywie wywala, nie może zagłodzić
+  najstarszego zużycia i sprawić, że nigdy nie zostanie zapisane. Ponowienie
+  wszystkiego, co sink zdążył zapisać, zanim zawiódł, jest zawsze bezpieczne.
+
+Pod spodem tego wszystkiego co minutę działa zaplanowane zadanie o nazwie
+`usage-flush` - jego harmonogram kontroluje zmienna środowiskowa
+`USAGE_FLUSH_CRON` - jako zabezpieczenie dla procesu, który ucichł albo nigdy
+niczego nie zapisał.
+
+## Odczyt zużycia
+
+```ts
+const migawka = await usage.aggregate({
+  meter: "wysylka_sms",
+  subject: klient.id,
+  from: new Date("2026-08-01T00:00:00Z"), // włącznie
+  to: new Date("2026-09-01T00:00:00Z"),   // wyłącznie
+});
+```
+
+```jsonc
+{
+  "version": 1,
+  "meter": "wysylka_sms",
+  "subject": "cus_01",
+  "from": "2026-08-01T00:00:00.000Z",
+  "to": "2026-09-01T00:00:00.000Z",
+  "properties": null,
+  "total": 42817,
+  "eventCount": 42817,
+  "firstOccurredAt": "2026-08-01T00:04:11.000Z",
+  "lastOccurredAt": "2026-08-31T23:51:07.000Z",
+  "digest": "usnap_9f2c...",
+  "sink": "postgres",
+  "computedAt": "2026-09-01T02:00:00.000Z",
+}
+```
+
+`aggregate` najpierw zrzuca bufor tego procesu, więc migawka wzięta chwilę po
+zużyciu, które ma opisywać, nie gubi po cichu tego, co jeszcze nie zostało
+zapisane. Przechowaj zwrócony obiekt obok tego, co z niego rozliczyłeś. Zadaj to
+samo pytanie za rok i porównaj `digest`: równy oznacza, że dziennik za tą
+liczbą jest bajt w bajt tym samym dziennikiem, co wtedy, gdy pytałeś pierwszy
+raz, różny oznacza, że coś się zmieniło - a `total` zestawione z `eventCount`
+mówi wtedy, czy zdarzenia dodano, usunięto czy przywrócono. `sink` i
+`computedAt` celowo siedzą poza digestem, więc migawka odtworzona z dziennika
+przeniesionego do innego sinka wciąż się zgadza.
+
+Zdarzenia stojące za liczbą mają własny endpoint, na wypadek gdy ktoś
+zakwestionuje rachunek:
+
+```ts
+const strona = await usage.listEvents({ meter, subject, from, to, limit: 100 });
+```
+
+Pokazanie komuś drugiej sumy, policzonej tak samo, niczego nie dowodzi co do
+poprawności pierwszej. Pokazanie mu pojedynczych wierszy, z których ta suma
+powstała - owszem.
+
+## Okna są półotwarte
+
+Każde okno, jakie ta wtyczka przyjmuje, to `[from, to)` - `from` włącznie, `to`
+wyłącznie - i to nie jest dowolna konwencja. Kolejne okresy sklejają się bez
+nakładania właśnie dzięki temu: `to` sierpnia to `from` września, a zdarzenie,
+które trafia dokładnie na tę granicę, jest policzone raz, we wrześniu. Okno
+domknięte z obu stron policzyłoby to samo zdarzenie w obu miesiącach, co jest
+dokładnie tą samą awarią podwójnego liczenia, przed którą cała ta wtyczka ma
+chronić, tylko osiągniętą inną drogą.
+
+Odwrócone albo zerowej długości okno jest odrzucane wprost, zamiast dostać
+odpowiedź z `total` równym zero. Zero powstałe z literówki w dacie wygląda
+dokładnie tak samo jak klient, który naprawdę niczego nie zużył, a ta wtyczka
+nie odda ci liczby, która mogłaby znaczyć jedno albo drugie.
+
+## Korekty
+
+Nigdy nie edytujesz zdarzenia zużycia - nie ma na to operacji. Jeśli coś
+zostało zapisane błędnie, dopisujesz jego odwrócenie:
+
+```ts
+await usage.record({
+  meter: "wysylka_sms",
+  subject: klient.id,
+  quantity: -12,
+  occurredAt: pierwotnaChwila,
+  properties: { correction_of: pierwotnyKlucz },
+});
+```
+
+Suma okna się zmienia, `eventCount` rośnie zamiast maleć, a `digest` się
+zmienia - wszystkie trzy rzeczy są dokładnie tym, co powinien zobaczyć audytor
+patrzący na dziennik. Wiersz zmieniony po cichu na miejscu nie pokazałby
+niczego z tego, i to jest cały powód, dla którego edycja nie jest operacją,
+jaką ta wtyczka oferuje.
+
+Korekta, której `occurredAt` przypada wewnątrz okresu już zamkniętego, nie
+zmienia tego, co ten okres wystawił - zamrożony wynik jest tym, co zostało
+naliczone, a zamknięcie znaczy, że już się nie rusza. Sprawi za to, że
+[`verifyPeriod`](./billing.pl.mdx#weryfikacja-po-czasie) przestanie się
+zgadzać, i tak właśnie dowiadujesz się, że korekta przyszła spóźniona. Zobacz
+[Okresy rozliczeniowe](./billing.pl.mdx#okres-zamknięty-a-zdarzenia-wciąż-napływają),
+co wtedy zrobić.
+
+## Kilka instancji Medusy naraz
+
+Każdy proces buforuje swoje zdarzenia niezależnie, a `aggregate` zrzuca tylko
+bufor tego procesu, który akurat obsłużył dane żądanie - nie ma jak sięgnąć do
+pamięci innej instancji. Więc okno powinno być zamknięte przynajmniej na
+`flushIntervalMs` przed wzięciem z niego migawki: rozliczenie wczorajszego
+zużycia jakiś czas po północy jest w porządku, rozliczenie ostatnich pięciu
+sekund - nie, bo część tych pięciu sekund może wciąż siedzieć w buforze innego
+procesu.
+
+To własność uruchamiania kilku procesów naraz, a nie ograniczenie samej tej
+wtyczki, i gorzej byłoby to przemilczeć niż powiedzieć wprost. Sama
+deduplikacja jest tym niedotknięta: klucze są globalne i niezależne od tego,
+który proces je wyliczył, więc sink trzyma dokładnie jeden wiersz na klucz,
+niezależnie od tego, ile procesów do niego pisało.

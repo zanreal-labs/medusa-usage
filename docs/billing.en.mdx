@@ -1,0 +1,360 @@
+---
+title: Billing periods
+description: Opening and closing a period, rating usage against a configured rate card, the frozen result that comes out of closing, what happens to a late event, and how to turn a closed period into an invoice.
+---
+
+## A period is a subject and a half-open window, nothing more
+
+```ts
+const period = await usage.openPeriod({
+  subject: customer.id,
+  startsAt: new Date("2026-08-01T00:00:00Z"), // inclusive
+  endsAt: new Date("2026-09-01T00:00:00Z"), // exclusive
+});
+```
+
+That is the entire model. It is not a subscription, it carries no price of its
+own, and it does not know what a month is - a host billing calendar months
+opens one period per month, and a host billing thirty days from the day someone
+signed up opens those instead, and both are exactly the same object as far as
+this plugin is concerned.
+
+The window is `[start, end)`, the same half-open shape every other window in
+this plugin uses, for the same reason: consecutive periods tile without
+overlapping, so an event on the boundary between August and September is billed
+exactly once, in September. A closed window would bill it in both, which is the
+double charge this whole package exists to make structurally impossible.
+
+### The id is derived, exactly like an event's key
+
+A period's id is a SHA-256 over its subject and its two instants, not a
+generated value - so opening the same period twice opens one period, and the
+second call is a no-op the primary key itself refuses rather than something
+application code has to detect. The consequence worth internalizing: a boundary
+that moves by a single millisecond is a *different* period, with a different
+id, that can be opened and closed entirely separately from the one it almost
+was. Generate your boundaries deterministically - from a calendar rule, not from
+whatever `new Date()` happens to return when a scheduled job runs - because a
+non-deterministic boundary makes "the same period" stop meaning anything.
+
+### Nothing closes by itself
+
+This package ships no scheduler for periods, and should not acquire one: only
+you know whether your billing cycle is calendar months, thirty days from
+signup, or something your finance team invented last quarter. Opening a period
+is a statement that a window exists to be measured. Closing it is a decision
+your application makes, on its own schedule.
+
+### The subscription is free, and the model follows from that
+
+There is no plan price here, no base fee, no minimum commitment, and no
+proration - and nowhere in the shape of a period to put one. A period's charge
+is the usage inside it, rated and summed, and nothing else. A customer who
+consumed nothing during a period owes nothing, and that falls out of the
+arithmetic on its own rather than needing a special case to produce it.
+
+So in this model, a subscription is only the thing that decides when a period
+ends. It costs nothing by itself, and what it costs is your data, never this
+package's.
+
+## Rating: turning usage into money
+
+A rate is configuration, set in `medusa-config.ts`, and nothing about your
+meters or your prices is compiled into this package:
+
+```ts
+options: {
+  billing: {
+    currency: "PLN",
+    rates: [
+      // 12 grosze per 10,000 requests, with the first million each period free.
+      { meter: "api_request", unitAmount: 12, perUnits: 10_000, includedUnits: 1_000_000 },
+      // 5 grosze per gigabyte, from the first one.
+      { meter: "gb_egress", unitAmount: 5 },
+    ],
+  },
+}
+```
+
+The arithmetic, in full, from `src/lib/billing/rating.ts`:
+
+```text
+chargeable = total <= 0 ? total : max(total - includedUnits, 0)
+amount     = trunc(chargeable * unitAmount / perUnits)
+```
+
+**Money is whole numbers of minor units**, for the identical reason quantities
+are whole numbers: a sum of floating-point amounts depends on the order the
+terms were added, so one period could rate to two different totals on two
+different days and both would be defensible - and one of them would end up on
+an invoice. `unitAmount` is grosze, cents or pence, exactly as every payment API
+on earth takes it.
+
+**The multiplication and the division are both done in `BigInt`**, so the
+intermediate product `chargeable * unitAmount` cannot overflow into a
+floating-point approximation on its way to a division that would otherwise have
+made it exact again. An amount too large to be a safe integer is refused
+outright rather than rounded into something that merely looks right.
+
+**`perUnits` is why a rate has a denominator at all.** It defaults to 1, which
+covers the plain "so much per unit" that most rates are. It exists because
+without it, this package would quietly bake in an assumption about every
+price: that a meter is worth at least one whole minor unit per unit consumed. A
+meter counting API requests is not - priced at a hundredth of a grosz per
+request, the only alternatives without `perUnits` would be inventing a coarser
+meter that counts thousands of requests (losing the raw count the audit path
+exists to show), or pricing in fractions, which is exactly the thing this
+package refuses to do anywhere.
+
+**The division truncates toward zero**, so rating a credit is always the exact
+negation of rating the charge it reverses. Flooring instead would break that
+symmetry, and a correction that does not precisely undo the thing it corrects
+is worse than no correction at all. The cost is one dropped fraction of a minor
+unit per meter per period, in the customer's favor whenever it is a charge - and
+a fraction of a grosz could not have been invoiced anyway.
+
+**An allowance forgives consumption; it does not create it.** A period whose
+net total is negative - because corrections outweighed the usage inside the
+window - passes through untouched rather than being clamped to zero by an
+allowance it never actually used. Clamping there would silently swallow money
+the customer is genuinely owed.
+
+**What is deliberately absent:** tiers, volume breaks, per-subject or per-plan
+overrides, dimension-priced rates, currency conversion. Each of those is a real
+pricing model in its own right, and none of them can be designed against
+products that do not exist yet - a rate card keyed by anything beyond the meter
+would have to become a small query language, and every host would end up
+configuring a slightly different one.
+
+Configuring no `billing` block at all is fully supported, and it means the
+plugin meters without rating anything. Recording, aggregating and listing usage
+are all unaffected by that; only closing a period refuses, and it refuses **by
+name** rather than quietly rating everything to zero. A period that came to
+nothing because nobody configured a price must never look identical to a
+period in which nothing was consumed.
+
+## The frozen result
+
+```ts
+const { result, alreadyClosed } = await usage.closePeriod({ periodId: period.id });
+```
+
+Every meter on the rate card is aggregated over the period's window, rated, and
+written as a line - **including the meters that came to nothing**, so the
+result proves each one was actually looked at rather than leaving you to
+wonder whether a missing line means zero usage or a forgotten rate.
+
+```jsonc
+{
+  "version": 1,
+  "periodId": "ubp_4ddb0a00...",
+  "subject": "cus_01",
+  "from": "2026-08-01T00:00:00.000Z",
+  "to": "2026-09-01T00:00:00.000Z",
+  "currency": "PLN",
+  "lines": [
+    {
+      "meter": "api_request",
+      "quantity": 1234567,
+      "eventCount": 1234567,
+      "firstOccurredAt": "2026-08-01T00:04:11.000Z",
+      "lastOccurredAt": "2026-08-31T23:51:07.000Z",
+      "usageDigest": "usnap_9f2c...",
+      "includedUnits": 1000000,
+      "unitAmount": 12,
+      "perUnits": 10000,
+      "chargeableQuantity": 234567,
+      "amount": 281,
+    },
+  ],
+  "total": 281,
+  "eventCount": 1234567,
+  "digest": "uper_dd025dc6...",
+  "sink": "postgres",
+  "closedAt": "2026-09-01T02:00:00.000Z",
+}
+```
+
+**Every line explains itself.** The quantity, the event count, the first and
+last instants inside the window, the rate that was applied, and the digest of
+the exact usage snapshot it was rated from. An invoice line nobody can justify
+is worse than no invoice at all, so an amount never appears here without the
+arithmetic that produced it, and the arithmetic never appears without a pointer
+straight back into the log.
+
+**It is stored, unlike a usage snapshot.** A snapshot is a value, computed on
+demand and owned by whoever asked for it. A result is a row, written exactly
+once. The moment a number is billed, it stops being a question about the log
+and becomes a fact about what was actually charged - and those two things can
+drift apart afterward, from a late event or a rate change. So the result is
+frozen at the instant of closing and read back verbatim from then on. Build
+your invoice from this row, and never from a live query, because a live query
+answers "what does the log say now," and an invoice needs "what did we
+actually charge."
+
+### Closing twice does not bill twice
+
+The result is inserted under the period's own derived id, and the insert
+ignores a conflict - the same pattern deduplication uses for events:
+
+```sql
+insert into "usage_period_result" (...) values (...) on conflict ("id") do nothing returning "id"
+```
+
+Nothing is read before that write, so there is no window in which a retried job
+or a second worker racing the first can slip through. The first call to
+actually reach the database appends the row and reports `alreadyClosed: false`.
+Every call after it appends nothing at all and reports the already-stored
+result with `alreadyClosed: true` - the first answer, verbatim, even if the log
+has moved on since then.
+
+**`alreadyClosed` is the one flag to key an invoice off, and only that one.**
+It cannot report `false` twice for the same period, which is exactly the
+property an idempotent invoicing step needs.
+
+The same guarantee reaches your own subscribers, because closing through the
+workflow emits `usage_period.closed` only on the call that actually did the
+closing:
+
+```ts
+import { closeBillingPeriodWorkflow } from "@zanreal/medusa-usage/workflows";
+
+await closeBillingPeriodWorkflow(container).run({ input: { periodId } });
+```
+
+A subscriber that turns this event into an invoice therefore never has to
+deduplicate it on its own side - it is simply never called twice for the same
+period.
+
+### Three states, and why telling them apart matters
+
+| What you see | What it means | What to do |
+| --- | --- | --- |
+| no result (`null`) | the period is not closed yet | do not bill it |
+| `total: 0`, `eventCount: 0` | closed, and provably empty | issue no invoice |
+| `total: 0`, `eventCount > 0` | closed, all of it inside the allowance | issue no invoice |
+| `total > 0` | closed, and this is what is owed | invoice it |
+| `total < 0` | corrections outweighed the usage | your call - typically a credit |
+
+A subscription with a free tier produces the second and third rows routinely -
+they are not edge cases to special-case around, and the right response to both
+is no invoice at all, not an invoice for zero.
+
+### Proving it later
+
+```ts
+const check = await usage.verifyPeriod(periodId);
+// { matches: true, storedTotal: 281, recomputedTotal: 281, totalDelta: 0, lines: [...] }
+```
+
+The period is rated again from the log, using the exact rate recorded on each
+stored line, and the two digests are compared. `matches` is true when the log
+behind the number is byte-for-byte the same log it was billed from. The rate
+used for the re-derivation is always the one that was recorded at closing time,
+never today's configuration - which is what makes this a check of the log
+rather than a check of your config file. Raising a price cannot make every past
+period fail to verify, and lowering one cannot quietly make an old invoice look
+wrong. Nothing is written by `verifyPeriod`, whatever it finds.
+
+## A period that closes while events are still arriving
+
+Late events are a fact of production systems, and the answer here is a decision
+this plugin makes rather than something left to chance.
+
+**An event that arrives after its period has closed is still recorded, in the
+period it actually occurred in, and it changes nothing about what was billed.**
+The log accepts it, because the log accepts everything and only ever filters on
+`occurredAt`. The frozen result does not move, because a number that has
+already been invoiced must not.
+
+So the difference between what was billed and what the log now says surfaces in
+exactly one place: `verifyPeriod` stops matching, and it says by how much, per
+meter. That is the intended behavior, not a fault condition. What you do about
+it is a business decision this package genuinely cannot make for you - but
+there is one shape of answer that keeps the log honest:
+
+**Carry the difference forward into an open period, as usage.** Record a
+correcting event with `occurredAt` inside the currently open window, pointing
+back at what it is catching up:
+
+```ts
+await usage.record({
+  meter: "api_request",
+  subject: customer.id,
+  quantity: 4120, // what August turned out to have missed
+  occurredAt: new Date(), // inside September, which is still open
+  properties: { late_for_period: closedPeriodId },
+});
+```
+
+August's invoice stands unchanged, September's includes the catch-up, and both
+totals are derivable from the log at any point afterward. Reopening August
+would mean editing something a customer has already been sent - this package
+has no operation for that, and it should not acquire one.
+
+**`closeDelayMs` reduces how often this happens**, without pretending to
+eliminate it. It is a floor on when a period may be frozen, expressed as
+milliseconds after the window ends:
+
+```ts
+billing: { currency: "PLN", closeDelayMs: 6 * 60 * 60 * 1000, rates: [...] }
+```
+
+Zero, the default, allows closing the moment the window is over. Raise it to
+whatever your slowest producer genuinely needs. How late a producer can
+realistically be is a property of that producer and of the sink underneath it,
+not of this package, so there is no default that could be right for every
+deployment - but note that closing a period at the stroke of midnight is
+optimistic in any deployment running more than one process that buffers
+events, and that the plugin already refuses outright to close a period whose
+window has not ended at all.
+
+## Turning a closed period into an invoice
+
+This is where the package stops and your application starts, and it is
+deliberately a short piece of code - none of what follows belongs inside this
+plugin:
+
+```ts
+// src/subscribers/invoice-closed-period.ts
+import { PERIOD_CLOSED_EVENT } from "@zanreal/medusa-usage/workflows";
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+export default async function invoiceClosedPeriod({ event, container }) {
+  const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+  const result = await usage.getPeriodResult(event.data.id);
+
+  // A free subscription with no usage owes nothing, and nothing is what it gets.
+  if (!result || result.total === 0) {
+    return;
+  }
+
+  await yourInvoicingService.create({
+    customerId: result.subject,
+    currency: result.currency,
+    // One invoice line per meter, described in your own words, priced in ours.
+    lines: result.lines
+      .filter((line) => line.amount !== 0)
+      .map((line) => ({
+        description: describeMeter(line.meter, line),
+        quantity: line.chargeableQuantity,
+        unitAmount: line.unitAmount,
+        amount: line.amount,
+      })),
+    total: result.total,
+    // Keep the digest. It is what proves the total, months from now.
+    reference: { periodId: result.periodId, digest: result.digest },
+  });
+}
+
+export const config = { event: PERIOD_CLOSED_EVENT };
+```
+
+Everything missing from that function is missing on purpose: tax, invoice
+numbering, the document itself, the payment, what happens when the payment
+fails, and what any of it is called in your customer's own language. This
+package cannot know any of that, and a package that guessed would be wrong for
+every deployment except the one the guess was made for.
+
+Store the `digest` beside whatever you billed from it. It is the one string
+that turns "trust us, that is what you used" into "here is the log, go check."

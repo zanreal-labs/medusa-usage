@@ -1,0 +1,281 @@
+---
+title: Recording and reading usage
+description: The three ways to record an event, why quantity has to be a whole number, why ingestion is batched, half-open windows, reading an aggregate back, and how a correction works on a log that never allows an update.
+---
+
+## Three ways in
+
+### From inside the container
+
+```ts
+import { USAGE_MODULE, UsageModuleService } from "@zanreal/medusa-usage/modules/usage";
+
+const usage = container.resolve<UsageModuleService>(USAGE_MODULE);
+
+await usage.record({
+  meter: "api_request", // what was consumed
+  subject: customer.id, // who consumed it, as an opaque id this plugin never resolves
+  quantity: 1, // how much, as a whole number of the meter's own smallest unit
+});
+```
+
+### From a workflow, a subscriber or a route
+
+```ts
+import { recordUsageWorkflow } from "@zanreal/medusa-usage/workflows";
+
+await recordUsageWorkflow(container).run({
+  input: {
+    events: [
+      {
+        meter: "gb_egress",
+        subject: subscriptionId,
+        quantity: 1_500_000, // bytes, not gigabytes - see below
+        occurredAt: transfer.finishedAt,
+        source: "gateway",
+        properties: { region: "eu-central" },
+        idempotencyKey: transfer.id, // preferred whenever one exists
+      },
+    ],
+  },
+});
+```
+
+The workflow has no compensation step, and that is not an omission. The log is
+append-only, so there is no operation that removes a usage event to undo it
+with, and adding one would work against the exact property this plugin exists to
+provide. Nothing is lost by that: the step is safe to re-run from the start,
+because the key is derived, so a workflow retried after a later step fails
+records the same usage once, not twice.
+
+### Over HTTP, for a producer outside this Medusa
+
+```bash
+curl -X POST https://your-store/admin/usage/events \
+  -H "x-medusa-access-token: $ADMIN_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"events":[{"meter":"api_request","subject":"cus_01","quantity":1}]}'
+```
+
+`POST /admin/usage/events` answers `202`, not `201`: in the default buffered
+mode the events are accepted and queued, not yet written, and the response's
+`written` field says which happened. It accepts a single event as the whole
+body too, for a producer metering one thing per request that should not have to
+wrap it in an array.
+
+The response carries the derived key of every event, and that is the entire
+reason a client is allowed to retry this call at all: the same body produces
+the same keys, so a client that retried after a timeout gets the identical keys
+back and the log gains nothing the second time.
+
+Every route under `/admin` uses Medusa's own authentication, and there is
+deliberately no unauthenticated ingestion route. A machine producer is a
+first-class caller here and uses an admin API key, which can be rotated and
+revoked - an unauthenticated way to write to a billing input would be an
+unauthenticated way to change somebody's bill.
+
+## Why there is no built-in subscriber, and why that is not a missing feature
+
+The obvious convenience would be "map Medusa event X to usage event Y in
+config." It cannot be built, for a reason that is specific to how Medusa loads a
+subscriber rather than a limitation of this plugin: Medusa binds a subscriber's
+events from a static `config` export, evaluated at plugin-load time - before the
+container exists, and therefore before this plugin's own options exist. A
+subscriber has no way to learn which events to listen for from configuration,
+because configuration is not there yet when the binding happens.
+
+So that mapping lives in your project instead, where it is three lines and where
+it belongs anyway - only you know what an order or a shipment means in units of
+your own meters:
+
+```ts
+// src/subscribers/meter-deliveries.ts
+export default async function meterDeliveries({ event, container }) {
+  await recordUsageWorkflow(container).run({
+    input: {
+      events: [
+        {
+          idempotencyKey: event.data.id,
+          meter: "delivery",
+          quantity: 1,
+          subject: event.data.customer_id,
+        },
+      ],
+    },
+  });
+}
+
+export const config = { event: "delivery.completed" };
+```
+
+## Why `quantity` has to be a whole number
+
+`quantity` is validated as a JavaScript safe integer, and that is arithmetic,
+not a style preference. A sum of floating-point numbers depends on the order the
+terms were added in - `0.1 + 0.2` is not `0.3` in IEEE 754, and neither is any
+other sum of decimals guaranteed to associate the way ordinary arithmetic does.
+The consequence for a usage log is concrete: the same set of events, summed in a
+different order because a sink happened to return rows in a different sequence,
+could produce two different totals on two different days, and both would be
+equally defensible as "the sum of these rows". A price computed from a number
+like that is not defensible at all.
+
+If what you are metering is genuinely fractional, meter a smaller unit instead
+of a larger fractional one - bytes rather than gigabytes, milliseconds rather
+than hours, thousandths of a credit rather than credits - and record the whole-number
+count of those. Convert to the unit a human reads at the point where you decide
+what it is worth, which is your code, not this plugin: this package never sees
+"2.4 gigabytes", only however many bytes you chose to report.
+
+The built-in Postgres sink stores `quantity` as `numeric` and sums it inside the
+database, which is exact at any size the column can hold. Reading a total back
+out actively refuses to answer, rather than silently rounding, once the sum
+would exceed `2^53` - the point past which a JavaScript number can no longer
+represent every integer. An approximate number that ends up priced is exactly
+the failure this whole plugin exists to prevent, so it is refused rather than
+handed back looking plausible.
+
+## Why ingestion is batched
+
+`record` validates, keys and buffers an event, then returns - it does not wait
+for the sink to acknowledge anything. A batch leaves for the sink when the
+buffer fills (`batchSize`, default 500 events) or when its oldest waiting event
+reaches `flushIntervalMs` (default 5 seconds), whichever happens first.
+
+The reasoning is deployment reality, not a micro-optimization: a Medusa instance
+talking to a managed Postgres over the internet pays real milliseconds of
+latency on every round trip, and a round trip per usage event puts a ceiling on
+how much you can meter that has nothing to do with how much traffic you
+actually have.
+
+**The cost, stated as plainly as the benefit.** Events waiting in the buffer
+live in memory only. A `SIGKILL` loses them. That exposure is bounded by three
+things acting together - the flush interval, the batch size, and a flush that
+runs on graceful shutdown - and it errs toward the safe side of the asymmetry
+this plugin is built around: losing a few seconds of usage is a visibly small
+number, never a silent double charge. If even that bounded loss is
+unacceptable for what you are metering, set `flushMode: "immediate"` and pay
+the round trip on every call.
+
+Two more properties of the buffer worth knowing:
+
+- **Back pressure, never dropping.** At `maxBufferedEvents` (default 10,000),
+  `record` starts waiting for a flush instead of growing the buffer further. If
+  that flush fails, the error reaches the caller, who can retry safely, because
+  the key is derived and a retry cannot double-count.
+- **A failed batch returns to the front of the queue**, ahead of anything
+  admitted since, so a sink that is persistently failing cannot starve the
+  oldest usage from ever being written. Retrying whatever the sink managed to
+  persist before it failed is always safe.
+
+A scheduled job named `usage-flush` runs underneath all of this every minute -
+the environment variable `USAGE_FLUSH_CRON` controls its schedule - as the
+backstop for a process that has gone quiet or never recorded anything at all.
+
+## Reading usage back
+
+```ts
+const snapshot = await usage.aggregate({
+  meter: "api_request",
+  subject: customer.id,
+  from: new Date("2026-08-01T00:00:00Z"), // inclusive
+  to: new Date("2026-09-01T00:00:00Z"), // exclusive
+});
+```
+
+```jsonc
+{
+  "version": 1,
+  "meter": "api_request",
+  "subject": "cus_01",
+  "from": "2026-08-01T00:00:00.000Z",
+  "to": "2026-09-01T00:00:00.000Z",
+  "properties": null,
+  "total": 148302,
+  "eventCount": 148302,
+  "firstOccurredAt": "2026-08-01T00:04:11.000Z",
+  "lastOccurredAt": "2026-08-31T23:51:07.000Z",
+  "digest": "usnap_9f2c...",
+  "sink": "postgres",
+  "computedAt": "2026-09-01T02:00:00.000Z",
+}
+```
+
+`aggregate` flushes this process's buffer before it answers, so a snapshot taken
+moments after the usage it covers does not silently miss whatever had not been
+written yet. Store the returned object beside whatever you billed from it. Ask
+the same question again in a year and compare `digest`: equal means the log
+behind the number is byte-for-byte the same log it was when you first asked, and
+different means something changed - `total` against `eventCount` then tells you
+whether events were added, removed, or restated. `sink` and `computedAt` sit
+outside the digest on purpose, so a snapshot re-derived from a log that was
+migrated to a different sink still matches.
+
+The events behind a number are their own endpoint, for when someone disputes a
+bill:
+
+```ts
+const page = await usage.listEvents({ meter, subject, from, to, limit: 100 });
+```
+
+Showing someone a second total, computed the same way, proves nothing about
+whether the first one was right. Showing them the individual rows the total was
+summed from does.
+
+## Windows are half-open
+
+Every window this plugin accepts is `[from, to)` - `from` inclusive, `to`
+exclusive - and that is not an arbitrary convention. Consecutive periods tile
+without overlapping precisely because of it: August's `to` is September's
+`from`, and the event that lands exactly on that boundary is counted once, in
+September. A closed window on both ends would count that same event in both
+months, which is the identical double-counting failure this whole plugin exists
+to prevent, arrived at by a different route.
+
+An inverted or zero-length window is refused outright rather than answered with
+a `total` of zero. A zero produced by a typo in a date looks exactly like a
+customer who genuinely consumed nothing, and this plugin will not hand you a
+number that could mean either.
+
+## Corrections
+
+You never edit a usage event - there is no operation for it. If something was
+recorded wrongly, you append its reversal instead:
+
+```ts
+await usage.record({
+  meter: "api_request",
+  subject: customer.id,
+  quantity: -12,
+  occurredAt: theOriginalInstant,
+  properties: { correction_of: originalKey },
+});
+```
+
+The window's total moves, `eventCount` goes up rather than down, and `digest`
+changes - all three of which are exactly what an auditor looking at the log
+should see happen. A row that was silently edited in place would show none of
+that, which is the whole reason editing is not an operation this plugin offers.
+
+A correction whose `occurredAt` falls inside a period that has already been
+closed does not change what that period was billed - the frozen result is what
+was charged, and closing means it does not move again. What it will do is make
+[`verifyPeriod`](./billing.en.mdx#proving-it-later) stop matching, which is how
+you find out a correction landed late. See [Billing periods](./billing.en.mdx#a-period-that-closes-while-events-are-still-arriving)
+for what to do about it.
+
+## Running more than one Medusa instance
+
+Each process buffers its own events independently, and `aggregate` only flushes
+the buffer belonging to whichever process happened to serve that particular
+request - it has no way to reach into another instance's memory. So a window
+should be closed for at least `flushIntervalMs` before it is snapshotted:
+billing yesterday's usage sometime after midnight today is fine, billing the
+last five seconds of it is not, because some of those five seconds might still
+be sitting in a different process's buffer.
+
+This is a property of running several processes, not a limitation specific to
+this plugin, and it would be worse to paper over it than to state it plainly.
+Deduplication itself is unaffected by any of this: keys are global and
+independent of which process derived them, so the sink keeps exactly one row
+per key no matter how many processes wrote toward it.
