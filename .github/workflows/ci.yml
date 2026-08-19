@@ -41,6 +41,12 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit -p tsconfig.json
 
+      # The admin extensions are built by Vite and are excluded from the server
+      # tsconfig, so the step above cannot see them. Without this one a broken
+      # admin route reaches the build step and nothing else.
+      - name: Typecheck admin extensions
+        run: pnpm exec tsc --noEmit -p src/admin/tsconfig.json
+
       - name: Test
         run: pnpm exec vitest run
 
