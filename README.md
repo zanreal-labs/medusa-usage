@@ -36,6 +36,7 @@ imagined.
 - [Options](#options)
 - [Environment variables](#environment-variables)
 - [Admin API](#admin-api)
+- [Admin UI](#admin-ui)
 - [Corrections](#corrections)
 - [Running more than one instance](#running-more-than-one-instance)
 - [What it deliberately does not do yet](#what-it-deliberately-does-not-do-yet)
@@ -804,6 +805,36 @@ The listing route takes the query a billing run makes:
 `GET /admin/usage/periods?status=open&ended_before=<now>` is every period that is
 over and has not been billed.
 
+## Admin UI
+
+One route, **Usage**, in the admin sidebar at `/app/usage`. It ships with the
+plugin and needs no configuration: register the plugin and the screen is there.
+
+It answers three questions and deliberately nothing else.
+
+- **Is anything being recorded at all?** Which sink is in effect, whether the last
+  flush worked, what is waiting in the buffer, and - separately, because it is a
+  different question - whether any usage exists on each meter in the chosen window.
+  A healthy pipe with nothing in it is a normal state, and so is a meter with a
+  total while the buffer is failing to flush.
+- **What did one subject consume?** A subject and a half-open UTC window at the
+  top, a row per meter with the quantity, the event count and the snapshot digest,
+  and the individual events behind any of them one click away. That last one is the
+  audit path: what settles a dispute is the facts the total was summed from, not
+  another total computed the same way.
+- **Is this period closed, and does it verify?** The periods list, with the reason
+  each open one can or cannot be closed yet - a missing rate card, or a window that
+  is still accruing - so a billing run does not discover it as a rejected request.
+  Opening a period shows the frozen result and its digest, and offers `close`
+  behind a confirmation and `verify` without one.
+
+Every number on the screen comes from the endpoints above and none of it is
+computed on the browser's side of the wire. There are no charts, the screen cannot
+open a period - which periods exist is the one thing this package cannot decide for
+you - and it does not enumerate meters, because the plugin records whatever meter
+name a producer sends and keeps no registry of them. The meter list is the rate
+card plus whatever you type in.
+
 ## Corrections
 
 You do not edit a usage event. If usage was recorded wrongly, append its reversal:
@@ -861,8 +892,6 @@ against a real pricing model rather than guessed at:
   from a job of your own.
 - **Limits and quotas.** Refusing or throttling a request once a subject has passed
   an allowance, which needs a fast read path that the aggregate query is not.
-- **An admin UI.** A screen that only rendered today's endpoints would need
-  redesigning the moment periods and rating exist.
 - **Rollups.** Aggregating from raw events stays honest indefinitely, but not fast
   indefinitely. When it stops being fast the answer is a materialised rollup that
   is re-derivable from the log, not a mutable counter.
