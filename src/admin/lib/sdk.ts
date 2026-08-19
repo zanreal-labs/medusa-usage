@@ -9,11 +9,15 @@ import Medusa from "@medusajs/js-sdk";
  * store - the routes it calls are the same authenticated `/admin` routes a machine
  * producer reaches with an API key.
  *
- * `VITE_BACKEND_URL` lets a store whose admin is served from a different origin
- * than its backend point at it; it defaults to the same origin.
+ * The base URL is the origin the admin is served from, and there is no option to
+ * change it. A plugin's admin extensions are built here, into a bundle a host then
+ * includes, so any `import.meta.env` value would be frozen at THIS package's build
+ * rather than read from the host's - an override a consumer could never actually
+ * set. Serving the admin from a different origin than the backend is a deployment
+ * this screen does not support, and saying so is better than offering a switch
+ * that does nothing.
  */
 export const sdk = new Medusa({
   auth: { type: "session" },
-  baseUrl: import.meta.env.VITE_BACKEND_URL || "/",
-  debug: import.meta.env.DEV,
+  baseUrl: "/",
 });

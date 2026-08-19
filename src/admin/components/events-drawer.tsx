@@ -1,5 +1,5 @@
 import { Button, Drawer, Table, Text } from "@medusajs/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UsageEventRow, UsageWindow } from "../lib/api";
 import { listEvents } from "../lib/api";
 import { abbreviate, formatInstant, formatQuantity } from "../lib/format";
@@ -47,7 +47,8 @@ export const EventsDrawer = ({
         <Drawer.Title>Events</Drawer.Title>
         <Drawer.Description>
           {meter}
-          {subject ? ` for ${subject}` : ", every subject"}, oldest first.
+          {subject ? ` for ${subject}` : ", every subject"}, oldest first
+          {window ? `, from ${formatInstant(window.from)} up to ${formatInstant(window.to)}` : ""}.
         </Drawer.Description>
       </Drawer.Header>
       <Drawer.Body className="overflow-y-auto">
@@ -69,46 +70,61 @@ const Events = ({
   const [rows, setRows] = useState<UsageEventRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pagingError, setPagingError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Which question the rows on screen belong to. A page that arrives after the
+  // meter, subject or window has changed belongs to a question nobody is asking
+  // any more, and appending it would put another meter's events in this table.
+  const generation = useRef(0);
+
   useEffect(() => {
-    let cancelled = false;
+    generation.current += 1;
+    const asked = generation.current;
+
     setIsLoading(true);
     setError(null);
+    setPagingError(null);
     setRows([]);
     setCursor(null);
 
     listEvents({ ...window, limit: PAGE_SIZE, meter, subject: subject || null })
       .then((page) => {
-        if (!cancelled) {
+        if (asked === generation.current) {
           setRows(page.events);
           setCursor(page.next_cursor);
           setIsLoading(false);
         }
       })
       .catch((failure: unknown) => {
-        if (!cancelled) {
+        if (asked === generation.current) {
           setError(messageOf(failure));
           setIsLoading(false);
         }
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [meter, subject, window.from, window.to]);
 
   const loadMore = () => {
+    const asked = generation.current;
     setIsLoading(true);
+    setPagingError(null);
+
     listEvents({ ...window, cursor, limit: PAGE_SIZE, meter, subject: subject || null })
       .then((page) => {
-        setRows((current) => [...current, ...page.events]);
-        setCursor(page.next_cursor);
-        setIsLoading(false);
+        if (asked === generation.current) {
+          setRows((current) => [...current, ...page.events]);
+          setCursor(page.next_cursor);
+          setIsLoading(false);
+        }
       })
       .catch((failure: unknown) => {
-        setError(messageOf(failure));
-        setIsLoading(false);
+        if (asked === generation.current) {
+          // Deliberately not `error`: the pages already read are still the audit
+          // trail, and replacing them with an alert would throw away the answer
+          // to punish the request that failed to extend it.
+          setPagingError(messageOf(failure));
+          setIsLoading(false);
+        }
       });
   };
 
@@ -121,9 +137,9 @@ const Events = ({
   if (rows.length === 0) {
     return (
       <Empty title="No events in this window">
-        Nothing was recorded on this meter between the two instants above. A meter that has never
-        been written to and a meter whose usage falls outside the window look the same from here,
-        so widening the window is the first thing to try.
+        Nothing was recorded on this meter in the window named above. A meter that has never been
+        written to and a meter whose usage falls outside the window look the same from here, so
+        widening the window is the first thing to try.
       </Empty>
     );
   }
@@ -160,6 +176,7 @@ const Events = ({
           ))}
         </Table.Body>
       </Table>
+      {pagingError ? <Failure message={pagingError} /> : null}
       <div className="flex items-center justify-between">
         <Text className="text-ui-fg-subtle" size="small">
           {formatQuantity(rows.length)} shown
@@ -167,7 +184,7 @@ const Events = ({
         </Text>
         {cursor ? (
           <Button disabled={isLoading} onClick={loadMore} size="small" variant="secondary">
-            Load more
+            {pagingError ? "Try again" : "Load more"}
           </Button>
         ) : null}
       </div>

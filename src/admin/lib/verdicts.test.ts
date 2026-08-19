@@ -170,6 +170,33 @@ describe("readVerification", () => {
     expect(verdict.detail).toContain("10.00 EUR");
   });
 
+  it("explains a mismatch where nothing moved, rather than saying 0 of 2 differ", () => {
+    // A digest covers the instants a line spans and the snapshot it was rated
+    // from, so events that cancel out fail to verify with every delta at zero.
+    const verdict = readVerification(
+      verification({
+        lines: [
+          {
+            amount: 1000,
+            amountDelta: 0,
+            currentAmount: 1000,
+            currentQuantity: 500,
+            meter: "api_request",
+            quantity: 500,
+            quantityDelta: 0,
+          },
+        ],
+        matches: false,
+        recomputedDigest: "uper_b",
+      }),
+      result,
+    );
+
+    expect(verdict.tone).toBe("orange");
+    expect(verdict.detail).not.toContain("0 of 1");
+    expect(verdict.detail).toContain("cancel out");
+  });
+
   it("reports a mismatch as a difference, not as an error, and says nothing was rewritten", () => {
     const verdict = readVerification(
       verification({

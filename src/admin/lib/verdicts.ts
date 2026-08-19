@@ -138,6 +138,13 @@ export interface Closability {
  * because a period that is still accruing would freeze at a number it has not
  * reached. The server refuses either way; this exists so an operator reads the
  * reason before pressing the button rather than after.
+ *
+ * `now` is the browser's clock, and the server will use its own. A period that
+ * crosses its closable instant therefore stays "still accruing" here until
+ * something re-renders, and a badly skewed clock can offer a button the server
+ * will refuse. Both are recoverable - the server's answer is the one that counts,
+ * and it arrives in the operator's own words - which is why this reproduces the
+ * rule rather than replacing it.
  */
 export function readClosability(
   period: PeriodRow,
@@ -205,8 +212,22 @@ export function readVerification(
   const moved = verification.lines.filter(
     (line) => line.quantityDelta !== 0 || line.amountDelta !== 0,
   );
+  const unchanged = "The frozen result has not been rewritten, and will not be.";
+
+  // A digest covers the evidence, not just the money: the first and last instants
+  // on each line and the digest of the snapshot it was rated from are inside it.
+  // So a window can gain an event that cancels another, or one of quantity zero,
+  // and fail to verify with every delta reading zero. Reporting "0 of N meters
+  // differ" and stopping there would look like a bug in this screen.
+  if (moved.length === 0) {
+    return {
+      detail: `No meter's quantity or amount has moved, and the digest still differs. A digest covers the evidence and not only the total: the instants a line spans, and the snapshot it was rated from, are inside it. Events that cancel out, or arrive with a quantity of zero, look exactly like this. ${unchanged}`,
+      headline: "Does not verify",
+      tone: "orange",
+    };
+  }
   return {
-    detail: `${moved.length} of ${verification.lines.length} meter${verification.lines.length === 1 ? "" : "s"} differ. The log now totals ${formatAmount(verification.recomputedTotal, result.currency)} against the ${formatAmount(verification.storedTotal, result.currency)} that was billed, a difference of ${formatAmountDelta(verification.totalDelta, result.currency)}. The frozen result has not been rewritten, and will not be.`,
+    detail: `${moved.length} of ${verification.lines.length} meter${verification.lines.length === 1 ? "" : "s"} differ. The log now totals ${formatAmount(verification.recomputedTotal, result.currency)} against the ${formatAmount(verification.storedTotal, result.currency)} that was billed, a difference of ${formatAmountDelta(verification.totalDelta, result.currency)}. ${unchanged}`,
     headline: "Does not verify",
     tone: "orange",
   };

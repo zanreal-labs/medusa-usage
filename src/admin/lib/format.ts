@@ -20,7 +20,15 @@ export const ABSENT = "-";
 
 const NUMBER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 
-/** A quantity, grouped. Fractions survive: a metered unit is not always whole. */
+/**
+ * A quantity, grouped.
+ *
+ * The log rejects a non-integer quantity outright - a sum of decimals depends on
+ * the order the terms are added, which would let one log produce two different
+ * totals - so the fraction digits below never fire against real data. They are
+ * here so that if one ever arrives it is shown rather than silently rounded into
+ * a number that looks exact and is not.
+ */
 export function formatQuantity(value: number): string {
   return Number.isFinite(value) ? NUMBER.format(value) : ABSENT;
 }

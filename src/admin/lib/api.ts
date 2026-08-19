@@ -1,3 +1,7 @@
+// Type-only, and it has to stay that way: these modules are server code and pull
+// in `node:crypto` and `@medusajs/framework/utils`. `import type` erases before
+// Vite sees them, and importing a VALUE from either would put the server's
+// dependencies into the admin bundle. Nothing enforces this beyond the reading.
 import type { PeriodResult, PeriodVerification } from "../../lib/billing/result";
 import type { UsageSnapshot } from "../../lib/usage/snapshot";
 import { sdk } from "./sdk";
@@ -19,8 +23,11 @@ import { sdk } from "./sdk";
  * frozen result cannot quietly stop matching what the screen renders.
  */
 
-/** A dimension bag, as it survives a round trip through JSON. */
-export type UsageProperties = Record<string, boolean | number | string | null>;
+/** Whatever JSON a producer put in `properties`. Nested, because the log allows it. */
+export type UsageJson = boolean | number | string | null | UsageJson[] | { [key: string]: UsageJson };
+
+/** A dimension bag, as the log stores it and the events route serves it. */
+export type UsageProperties = Record<string, UsageJson>;
 
 /** `GET /admin/usage`. What the plugin is doing right now. */
 export interface UsageStatusResponse {
@@ -120,10 +127,11 @@ export const verifyPeriod = (id: string): Promise<PeriodVerification> =>
 /**
  * Drop the parameters the caller left empty.
  *
- * The routes treat an absent parameter and an empty one differently in places -
- * `status=` is rejected as neither "open" nor "closed" only if it arrives as a
- * non-empty string, and `subject=` narrows to a subject rather than meaning every
- * subject. Sending nothing is the unambiguous way to ask the wider question.
+ * The routes already coerce a blank exactly as they coerce an absent one, so this
+ * changes no answer. It is here so the request an operator can see in their network
+ * tab is the question that was asked: `?meter=api_request` rather than
+ * `?meter=api_request&subject=&cursor=`, which reads like a filter that was applied
+ * and came to nothing.
  */
 function compact(query: object): Record<string, unknown> {
   return Object.fromEntries(

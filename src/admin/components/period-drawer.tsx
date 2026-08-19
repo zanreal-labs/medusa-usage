@@ -1,10 +1,12 @@
-import { Button, Drawer, Table, Text, usePrompt } from "@medusajs/ui";
+import { Button, Drawer, Table, Text, Tooltip, usePrompt } from "@medusajs/ui";
 import { useState } from "react";
 import type { PeriodResult, PeriodVerification } from "../../lib/billing/result";
-import type { UsageStatusResponse } from "../lib/api";
-import { closePeriod, getPeriod, verifyPeriod } from "../lib/api";
+import type { PeriodRow, UsageStatusResponse, UsageWindow } from "../lib/api";
+import { closePeriod, getAggregate, getPeriod, verifyPeriod } from "../lib/api";
 import { formatAmount, formatAmountDelta, formatDelta, formatInstant, formatQuantity } from "../lib/format";
+import type { Request } from "../lib/use-request";
 import { messageOf, useRequest } from "../lib/use-request";
+import { periodWindow } from "../lib/window";
 import { readClosability, readVerification } from "../lib/verdicts";
 import { Empty, Failure, Field, Loading, VerdictLine } from "./panel";
 
@@ -25,14 +27,14 @@ export const PeriodDrawer = ({
   onClose,
   onClosed,
   periodId,
-  rates,
+  status,
 }: {
   onClose: () => void;
   /** Told after a real close, so the rest of the screen stops calling it open. */
   onClosed: () => void;
   periodId: string | null;
-  /** `undefined` while the status is still being read. */
-  rates: UsageStatusResponse["rates"] | undefined;
+  /** The whole request: an unread rate card and an unreadable one differ. */
+  status: Request<UsageStatusResponse>;
 }) => (
   <Drawer
     onOpenChange={(open) => {
@@ -48,7 +50,7 @@ export const PeriodDrawer = ({
         <Drawer.Description>{periodId ?? ""}</Drawer.Description>
       </Drawer.Header>
       <Drawer.Body className="overflow-y-auto">
-        {periodId ? <Detail onClosed={onClosed} periodId={periodId} rates={rates} /> : null}
+        {periodId ? <Detail onClosed={onClosed} periodId={periodId} status={status} /> : null}
       </Drawer.Body>
     </Drawer.Content>
   </Drawer>
@@ -57,11 +59,11 @@ export const PeriodDrawer = ({
 const Detail = ({
   onClosed,
   periodId,
-  rates,
+  status,
 }: {
   onClosed: () => void;
   periodId: string;
-  rates: UsageStatusResponse["rates"] | undefined;
+  status: Request<UsageStatusResponse>;
 }) => {
   const prompt = usePrompt();
   const request = useRequest(() => getPeriod(periodId), [periodId]);
@@ -79,7 +81,7 @@ const Detail = ({
   }
 
   const { period, result } = request.data;
-  const closability = readClosability(period, rates, new Date());
+  const closability = readClosability(period, status.data?.rates, new Date());
 
   const close = async () => {
     const confirmed = await prompt({
@@ -128,7 +130,9 @@ const Detail = ({
 
       <div className="flex flex-col gap-y-2">
         <Text className="text-ui-fg-subtle" size="small">
-          {closability.reason}
+          {closability.state === "unknown" && status.error
+            ? `Whether this period can be closed is not known: reading the plugin's status failed. ${status.error}`
+            : closability.reason}
         </Text>
         {action.error ? <Failure message={action.error} /> : null}
         <div className="flex items-center gap-x-2">
@@ -157,11 +161,14 @@ const Detail = ({
       {result ? (
         <Result result={result} />
       ) : (
-        <Empty title="No frozen result">
-          This period is open, which means it has not been billed. That is a different thing from a
-          result whose total is zero: an open period says do not bill this yet, while a closed one
-          worth nothing says it provably came to nothing.
-        </Empty>
+        <>
+          <Empty title="No frozen result">
+            This period is open, which means it has not been billed. That is a different thing from
+            a result whose total is zero: an open period says do not bill this yet, while a closed
+            one worth nothing says it provably came to nothing.
+          </Empty>
+          <Accrued period={period} rates={status.data?.rates} />
+        </>
       )}
 
       {verification && result ? (
@@ -258,3 +265,93 @@ const Verification = ({
     )}
   </div>
 );
+
+/**
+ * What an open period has accrued so far.
+ *
+ * The one number a screen built around a date picker cannot produce. A period's
+ * boundaries are exact to the millisecond and are what it will be billed on, so
+ * `periodWindow` hands them to the aggregate unrounded rather than approximating
+ * them to the nearest day and reporting a total the eventual invoice will not
+ * agree with.
+ *
+ * It is a running total and it is labelled as one. Nothing is frozen until the
+ * period is closed, and a number read here five minutes before a close is not a
+ * promise about what the close will find.
+ */
+const Accrued = ({
+  period,
+  rates,
+}: {
+  period: PeriodRow;
+  rates: UsageStatusResponse["rates"] | undefined;
+}) => {
+  const meters = rates?.meters ?? [];
+  if (meters.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-y-3">
+      <Text size="small" weight="plus">
+        Accrued so far, over this period's own boundaries
+      </Text>
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.HeaderCell>Meter</Table.HeaderCell>
+            <Table.HeaderCell>Quantity</Table.HeaderCell>
+            <Table.HeaderCell>Events</Table.HeaderCell>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {meters.map((rate) => (
+            <AccruedRow
+              key={rate.meter}
+              meter={rate.meter}
+              subject={period.subject}
+              window={periodWindow(period)}
+            />
+          ))}
+        </Table.Body>
+      </Table>
+    </div>
+  );
+};
+
+const AccruedRow = ({
+  meter,
+  subject,
+  window,
+}: {
+  meter: string;
+  subject: string;
+  window: UsageWindow;
+}) => {
+  const { data, error } = useRequest(
+    () => getAggregate({ ...window, meter, subject }),
+    [meter, subject, window.from, window.to],
+  );
+
+  return (
+    <Table.Row>
+      <Table.Cell>
+        <Text as="span" family="mono" size="small">
+          {meter}
+        </Text>
+      </Table.Cell>
+      <Table.Cell>
+        {data ? (
+          formatQuantity(data.total)
+        ) : (
+          <Tooltip content={error ?? "Reading the log"}>
+            <Text as="span" className="text-ui-fg-muted" size="small">
+              {error ? "unavailable" : "..."}
+            </Text>
+          </Tooltip>
+        )}
+      </Table.Cell>
+      <Table.Cell>{data ? formatQuantity(data.eventCount) : "-"}</Table.Cell>
+    </Table.Row>
+  );
+};

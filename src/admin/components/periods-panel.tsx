@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { PeriodRow, UsageStatusResponse } from "../lib/api";
 import { listPeriods } from "../lib/api";
 import { formatInstant } from "../lib/format";
+import type { Request } from "../lib/use-request";
 import { useRequest } from "../lib/use-request";
 import { readClosability } from "../lib/verdicts";
 import { Empty, Failure, Loading, Panel } from "./panel";
@@ -24,15 +25,19 @@ const PAGE_SIZE = 50;
  */
 export const PeriodsPanel = ({
   onSelect,
-  rates,
   refreshToken,
+  status: statusRequest,
   subject,
 }: {
   onSelect: (id: string) => void;
-  /** `undefined` while the status is still being read. */
-  rates: UsageStatusResponse["rates"] | undefined;
   /** Bumped by the page after a close, so the list reflects it. */
   refreshToken: number;
+  /**
+   * The whole status request rather than its rate card, because "not read yet"
+   * and "could not be read" produce the same absent rate card and must not
+   * produce the same sentence.
+   */
+  status: Request<UsageStatusResponse>;
   subject: string;
 }) => {
   // "any" rather than "" because a Radix select item cannot carry an empty
@@ -102,10 +107,23 @@ export const PeriodsPanel = ({
           </Table.Header>
           <Table.Body>
             {periods.map((period) => (
-              <PeriodRowView key={period.id} onSelect={onSelect} period={period} rates={rates} />
+              <PeriodRowView
+                key={period.id}
+                onSelect={onSelect}
+                period={period}
+                status={statusRequest}
+              />
             ))}
           </Table.Body>
         </Table>
+      ) : null}
+      {periods.length === PAGE_SIZE ? (
+        <div className="px-6 py-3">
+          <Text className="text-ui-fg-subtle" size="small">
+            Showing the first {PAGE_SIZE}, which is as many as this panel asks for. There are very
+            likely more: narrow by subject or by status to reach them.
+          </Text>
+        </div>
       ) : null}
     </Panel>
   );
@@ -114,13 +132,13 @@ export const PeriodsPanel = ({
 const PeriodRowView = ({
   onSelect,
   period,
-  rates,
+  status,
 }: {
   onSelect: (id: string) => void;
   period: PeriodRow;
-  rates: UsageStatusResponse["rates"] | undefined;
+  status: Request<UsageStatusResponse>;
 }) => {
-  const closability = readClosability(period, rates, new Date());
+  const closability = readClosability(period, status.data?.rates, new Date());
 
   return (
     <Table.Row>
@@ -139,7 +157,9 @@ const PeriodRowView = ({
       </Table.Cell>
       <Table.Cell>
         <Text className="text-ui-fg-subtle" size="small">
-          {SHORT_REASON[closability.state]}
+          {closability.state === "unknown" && status.error
+            ? "Status unavailable"
+            : SHORT_REASON[closability.state]}
         </Text>
       </Table.Cell>
       <Table.Cell>

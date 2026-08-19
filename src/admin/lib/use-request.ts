@@ -27,29 +27,29 @@ export interface Request<T> {
  * lists what the request is actually a function of, which is what should decide
  * whether it is made again - an inline closure would re-fire on every render.
  *
- * A null `run` means the question cannot be asked yet, which is a real state here:
- * with an invalid window there is nothing to ask about, and firing a request that
- * is known to be rejected would replace the operator's mistake with the API's
- * complaint about it.
+ * `deps` must be a fixed-length literal at each call site. It is spread into a
+ * dependency array, and React throws if that array changes size between renders.
+ * A conditional dependency belongs in the value, not in the length: pass `null`
+ * rather than omitting an entry.
  */
-export function useRequest<T>(run: (() => Promise<T>) | null, deps: readonly unknown[]): Request<T> {
+export function useRequest<T>(run: () => Promise<T>, deps: readonly unknown[]): Request<T> {
   const [state, setState] = useState<{ data: T | null; error: string | null; isLoading: boolean }>({
     data: null,
     error: null,
-    isLoading: run !== null,
+    isLoading: true,
   });
   const [nonce, setNonce] = useState(0);
 
+  // Refreshed in an effect rather than during render. Effects run in declaration
+  // order, so this one has already updated the ref by the time the request effect
+  // below reads it, and render stays free of side effects.
   const latest = useRef(run);
-  latest.current = run;
+  useEffect(() => {
+    latest.current = run;
+  });
 
   useEffect(() => {
     const request = latest.current;
-    if (!request) {
-      setState({ data: null, error: null, isLoading: false });
-      return;
-    }
-
     let cancelled = false;
     setState((previous) => ({ ...previous, error: null, isLoading: true }));
 

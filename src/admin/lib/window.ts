@@ -35,11 +35,13 @@ export function toDateInput(date: Date): string {
  *
  * `to` is tomorrow, not today, because the bound is exclusive - a `to` of today
  * would silently drop everything recorded since midnight, which on a quiet meter
- * is everything there is.
+ * is everything there is. `from` is therefore 29 days back, not 30: with an
+ * exclusive upper bound, today plus the 29 days before it IS thirty days, and the
+ * button that resets to this says thirty.
  */
 export function defaultWindow(now: Date): { from: string; to: string } {
   return {
-    from: toDateInput(new Date(now.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS)),
+    from: toDateInput(new Date(now.getTime() - (DEFAULT_WINDOW_DAYS - 1) * DAY_MS)),
     to: toDateInput(new Date(now.getTime() + DAY_MS)),
   };
 }
@@ -65,11 +67,15 @@ export function resolveWindow(from: string, to: string): ResolvedWindow {
   if (!start || !end) {
     return { error: "Both dates are required, as YYYY-MM-DD.", window: null };
   }
-  if (start >= end) {
+  if (start === end) {
     return {
-      error: "The window ends before it starts. `To` is exclusive, so it must be the day after the last one you want.",
+      error:
+        "That window has no width, so it would always total nothing. `To` is exclusive, so it must be the day AFTER the last one you want.",
       window: null,
     };
+  }
+  if (start > end) {
+    return { error: "The window ends before it starts.", window: null };
   }
   return { error: null, window: { from: start, to: end } };
 }

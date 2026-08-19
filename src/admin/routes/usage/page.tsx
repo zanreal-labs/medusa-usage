@@ -139,8 +139,8 @@ const UsagePage = () => {
 
       <PeriodsPanel
         onSelect={setPeriodId}
-        rates={status.data?.rates}
         refreshToken={refreshToken}
+        status={status}
         subject={applied.subject}
       />
 
@@ -161,7 +161,7 @@ const UsagePage = () => {
           setRefreshToken((value) => value + 1);
         }}
         periodId={periodId}
-        rates={status.data?.rates}
+        status={status}
       />
     </div>
   );

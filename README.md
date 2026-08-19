@@ -828,12 +828,18 @@ It answers three questions and deliberately nothing else.
   Opening a period shows the frozen result and its digest, and offers `close`
   behind a confirmation and `verify` without one.
 
-Every number on the screen comes from the endpoints above and none of it is
-computed on the browser's side of the wire. There are no charts, the screen cannot
-open a period - which periods exist is the one thing this package cannot decide for
+Every total, amount and count on the screen is rendered exactly as the endpoints
+above sent it; amounts are converted from minor currency units by moving the
+decimal point through the digits, never by dividing, so a figure there cannot
+drift from the figure that was billed. There are no charts, the screen cannot open
+a period - which periods exist is the one thing this package cannot decide for
 you - and it does not enumerate meters, because the plugin records whatever meter
 name a producer sends and keeps no registry of them. The meter list is the rate
 card plus whatever you type in.
+
+The screen talks to the same origin the admin is served from. A plugin's admin
+extensions are built into a bundle before a host ever sees them, so a backend on a
+separate origin is a deployment it cannot be pointed at.
 
 ## Corrections
 

@@ -144,9 +144,14 @@ const MeterRow = ({
       {isLoading || !data ? (
         <>
           <Table.Cell>
-            <Text className="text-ui-fg-subtle" size="small">
-              {error ?? "Reading the log..."}
-            </Text>
+            {/* The message goes in a tooltip rather than the cell: an API error is
+                a sentence, the column is a number wide, and a clipped explanation
+                is worse than a word that promises one. */}
+            <Tooltip content={error ?? "Reading the log"}>
+              <Text as="span" className="text-ui-fg-muted" size="small">
+                {error ? "unavailable" : "..."}
+              </Text>
+            </Tooltip>
           </Table.Cell>
           <Table.Cell>-</Table.Cell>
           <Table.Cell>-</Table.Cell>

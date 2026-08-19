@@ -32,10 +32,13 @@ actually arrives with, and each one used to require a query against the sink.
 
 - **No charts.** A chart answers a question nobody arrived with, and answering it
   quickly would need a rollup this package does not have.
-- **No arithmetic.** Nothing on the screen is computed on this side of the wire.
-  Amounts are rendered from whole minor currency units by moving the decimal point
-  through the digits, never by dividing, so a total here cannot drift from the
-  total that was billed.
+- **No money or quantities computed here.** Every total, amount and count is
+  rendered exactly as the API sent it. Amounts are converted from whole minor
+  currency units by moving the decimal point through the digit string, never by
+  dividing, so a figure here cannot drift from the figure that was billed. The one
+  thing the screen does compute is `ends_at + closeDelayMs`, to say why a period is
+  not closable yet - the server enforces that rule regardless, and its answer is
+  the one that counts.
 - **No endpoint of its own.** Everything comes from the authenticated admin API
   the plugin already ships. If the screen ever appears to need a new route, that is
   a signal about the API rather than about the screen.
@@ -50,10 +53,13 @@ actually arrives with, and each one used to require a query against the sink.
 ## Layout
 
 ```
-lib/          Pure modules, unit tested: the API client and its wire types,
-              formatting, window resolution, and the verdicts that turn a
-              response into the sentence the screen shows.
-components/   The panels and drawers. No state beyond what is on screen.
+lib/          The API client and its wire types, formatting, window resolution,
+              the verdicts that turn a response into the sentence the screen
+              shows, and one request hook. `format`, `window` and `verdicts` are
+              pure and unit tested; `api`, `sdk` and `use-request` are the seam
+              to the network and are not.
+components/   The panels and drawers. No state beyond what is on screen. Their
+              empty states are asserted in `empty-states.test.tsx`.
 routes/usage/ page.tsx - the route itself, and the only state that spans panels.
 ```
 

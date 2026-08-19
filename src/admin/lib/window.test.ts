@@ -5,10 +5,12 @@ import { defaultWindow, periodWindow, resolveWindow, toDateInput } from "./windo
 const NOW = new Date("2026-08-19T11:39:00.000Z");
 
 describe("defaultWindow", () => {
-  it("looks back thirty days and ends tomorrow, because the bound is exclusive", () => {
+  it("covers thirty days, counting the exclusive upper bound correctly", () => {
     // A `to` of today would drop everything recorded since midnight, which on a
-    // quiet meter is everything there is.
-    expect(defaultWindow(NOW)).toEqual({ from: "2026-07-20", to: "2026-08-20" });
+    // quiet meter is everything there is. So `to` is tomorrow, which makes `from`
+    // 29 days back rather than 30 - otherwise the button that says thirty days
+    // asks for thirty-one.
+    expect(defaultWindow(NOW)).toEqual({ from: "2026-07-21", to: "2026-08-20" });
   });
 });
 
@@ -26,14 +28,16 @@ describe("resolveWindow", () => {
     });
   });
 
-  it("refuses a window that ends before it starts, and says why `to` is exclusive", () => {
+  it("refuses a window that ends before it starts", () => {
     const resolved = resolveWindow("2026-09-01", "2026-08-01");
     expect(resolved.window).toBeNull();
-    expect(resolved.error).toMatch(/exclusive/u);
+    expect(resolved.error).toMatch(/ends before it starts/u);
   });
 
-  it("refuses a window of no width, which would always total nothing", () => {
-    expect(resolveWindow("2026-08-01", "2026-08-01").window).toBeNull();
+  it("tells a zero-width window apart from a reversed one, because the fix differs", () => {
+    const resolved = resolveWindow("2026-08-01", "2026-08-01");
+    expect(resolved.window).toBeNull();
+    expect(resolved.error).toMatch(/exclusive/u);
   });
 
   it("refuses anything that is not a date, rather than sending it and failing", () => {
