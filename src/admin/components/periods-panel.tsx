@@ -1,5 +1,6 @@
 import { Button, Select, StatusBadge, Table, Text } from "@medusajs/ui";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { PeriodRow, UsageStatusResponse } from "../lib/api";
 import { listPeriods } from "../lib/api";
 import { formatInstant } from "../lib/format";
@@ -40,6 +41,7 @@ export const PeriodsPanel = ({
   status: Request<UsageStatusResponse>;
   subject: string;
 }) => {
+  const { t } = useTranslation();
   // "any" rather than "" because a Radix select item cannot carry an empty
   // value, and the API wants the parameter absent rather than blank.
   const [status, setStatus] = useState<"any" | "closed" | "open">("any");
@@ -67,16 +69,21 @@ export const PeriodsPanel = ({
             value={status}
           >
             <Select.Trigger className="min-w-40">
-              <Select.Value placeholder="Any status" />
+              <Select.Value placeholder={t("usage.periods.status.any")} />
             </Select.Trigger>
             <Select.Content>
-              <Select.Item value="any">Any status</Select.Item>
-              <Select.Item value="open">Open, not billed</Select.Item>
-              <Select.Item value="closed">Closed</Select.Item>
+              <Select.Item value="any">{t("usage.periods.status.any")}</Select.Item>
+              <Select.Item value="open">{t("usage.periods.status.open")}</Select.Item>
+              <Select.Item value="closed">{t("usage.periods.status.closed")}</Select.Item>
             </Select.Content>
           </Select>
-          <Button disabled={request.isLoading} onClick={request.reload} size="small" variant="secondary">
-            Refresh
+          <Button
+            disabled={request.isLoading}
+            onClick={request.reload}
+            size="small"
+            variant="secondary"
+          >
+            {t("usage.common.refresh")}
           </Button>
         </>
       }
@@ -86,10 +93,10 @@ export const PeriodsPanel = ({
         // window someone picked for a different question would be the worst kind of
         // helpful.
         subject
-          ? `Periods for "${subject}", newest window first. A period is closed when, and only when, it has a frozen result. The dates above do not filter this list.`
-          : "Newest window first. A period is closed when, and only when, it has a frozen result. The dates above do not filter this list."
+          ? t("usage.periods.descriptionSubject", { subject })
+          : t("usage.periods.descriptionAll")
       }
-      title="Billing periods"
+      title={t("usage.periods.title")}
     >
       {request.error ? <Failure message={request.error} /> : null}
       {request.isLoading && !request.data ? <Loading /> : null}
@@ -98,10 +105,10 @@ export const PeriodsPanel = ({
         <Table>
           <Table.Header>
             <Table.Row>
-              <Table.HeaderCell>Subject</Table.HeaderCell>
-              <Table.HeaderCell>Window</Table.HeaderCell>
-              <Table.HeaderCell>Status</Table.HeaderCell>
-              <Table.HeaderCell>Closable</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.common.subject")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.periods.columns.window")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.periods.columns.status")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.periods.columns.closable")}</Table.HeaderCell>
               <Table.HeaderCell />
             </Table.Row>
           </Table.Header>
@@ -120,8 +127,7 @@ export const PeriodsPanel = ({
       {periods.length === PAGE_SIZE ? (
         <div className="px-6 py-3">
           <Text className="text-ui-fg-subtle" size="small">
-            Showing the first {PAGE_SIZE}, which is as many as this panel asks for. There are very
-            likely more: narrow by subject or by status to reach them.
+            {t("usage.periods.truncated", { count: PAGE_SIZE })}
           </Text>
         </div>
       ) : null}
@@ -138,7 +144,8 @@ const PeriodRowView = ({
   period: PeriodRow;
   status: Request<UsageStatusResponse>;
 }) => {
-  const closability = readClosability(period, status.data?.rates, new Date());
+  const { t } = useTranslation();
+  const closability = readClosability(t, period, status.data?.rates, new Date());
 
   return (
     <Table.Row>
@@ -148,18 +155,21 @@ const PeriodRowView = ({
         </Text>
       </Table.Cell>
       <Table.Cell>
-        {formatInstant(period.starts_at)} to {formatInstant(period.ends_at)}
+        {t("usage.periods.windowRange", {
+          from: formatInstant(period.starts_at),
+          to: formatInstant(period.ends_at),
+        })}
       </Table.Cell>
       <Table.Cell>
         <StatusBadge color={period.closed_at ? "green" : "grey"}>
-          {period.closed_at ? "Closed" : "Open"}
+          {period.closed_at ? t("usage.periods.badge.closed") : t("usage.periods.badge.open")}
         </StatusBadge>
       </Table.Cell>
       <Table.Cell>
         <Text className="text-ui-fg-subtle" size="small">
           {closability.state === "unknown" && status.error
-            ? "Status unavailable"
-            : SHORT_REASON[closability.state]}
+            ? t("usage.periods.statusUnavailable")
+            : t(SHORT_REASON[closability.state])}
         </Text>
       </Table.Cell>
       <Table.Cell>
@@ -170,20 +180,25 @@ const PeriodRowView = ({
           size="small"
           variant="transparent"
         >
-          Open
+          {t("usage.periods.open")}
         </Button>
       </Table.Cell>
     </Table.Row>
   );
 };
 
-/** The column is a glance; the drawer carries the reason in full. */
+/**
+ * The column is a glance; the drawer carries the reason in full.
+ *
+ * Translation keys rather than words, so the map stays a plain constant outside
+ * the component and the lookup happens where `t` is.
+ */
 const SHORT_REASON: Record<ReturnType<typeof readClosability>["state"], string> = {
-  closable: "Ready to close",
-  closed: "Already closed",
-  "no-rate-card": "No rate card",
-  "too-early": "Still accruing",
-  unknown: "-",
+  closable: "usage.periods.shortReason.closable",
+  closed: "usage.periods.shortReason.closed",
+  "no-rate-card": "usage.periods.shortReason.noRateCard",
+  "too-early": "usage.periods.shortReason.tooEarly",
+  unknown: "usage.periods.shortReason.unknown",
 };
 
 /**
@@ -191,17 +206,14 @@ const SHORT_REASON: Record<ReturnType<typeof readClosability>["state"], string> 
  * panel, and the difference between "nothing has happened yet" and "something is
  * broken" is the only thing it has to get right.
  */
-export const PeriodsEmpty = ({ filtered }: { filtered: boolean }) =>
-  filtered ? (
-    <Empty title="No periods match these filters">
-      Clear the subject, or set the status back to any, to see whether there are periods that do
-      not match rather than none at all.
+export const PeriodsEmpty = ({ filtered }: { filtered: boolean }) => {
+  const { t } = useTranslation();
+
+  return filtered ? (
+    <Empty title={t("usage.periods.emptyFilteredTitle")}>
+      {t("usage.periods.emptyFilteredBody")}
     </Empty>
   ) : (
-    <Empty title="No periods have been opened">
-      This is the expected state on a new installation, and it is not a fault. The plugin does not
-      create periods, because only the application knows what a billing cycle is here - whether it
-      is a calendar month, thirty days from the day someone signed up, or something else. Open one
-      with `POST /admin/usage/periods`, from a job of your own, and it will appear in this list.
-    </Empty>
+    <Empty title={t("usage.periods.emptyTitle")}>{t("usage.periods.emptyBody")}</Empty>
   );
+};

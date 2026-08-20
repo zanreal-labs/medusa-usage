@@ -1,5 +1,6 @@
 import { Button, Input, Table, Text, Tooltip } from "@medusajs/ui";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { UsageWindow } from "../lib/api";
 import { getAggregate } from "../lib/api";
 import { abbreviate, formatInstant, formatQuantity } from "../lib/format";
@@ -35,6 +36,7 @@ export const MetersPanel = ({
   window: UsageWindow | null;
   windowError: string | null;
 }) => {
+  const { t } = useTranslation();
   const [probed, setProbed] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
 
@@ -64,40 +66,39 @@ export const MetersPanel = ({
                 add();
               }
             }}
-            placeholder="Another meter name"
+            placeholder={t("usage.meters.addPlaceholder")}
             size="small"
             value={draft}
           />
           <Button disabled={!draft.trim()} onClick={add} size="small" variant="secondary">
-            Add
+            {t("usage.meters.add")}
           </Button>
         </>
       }
       description={
+        // Two whole sentences rather than one with a name spliced in, because the
+        // subject sits in a different case in Polish and the sentence around it
+        // is not the same sentence.
         subject
-          ? `What "${subject}" consumed in the chosen window, meter by meter.`
-          : "What every subject together consumed in the chosen window, meter by meter."
+          ? t("usage.meters.descriptionSubject", { subject })
+          : t("usage.meters.descriptionAll")
       }
-      title="Meters"
+      title={t("usage.meters.title")}
     >
       {windowError ? <Failure message={windowError} /> : null}
       {!windowError && shown.length === 0 ? (
-        <Empty title="No meters to ask about">
-          This installation has no rate card, so the plugin does not know which meter names exist -
-          it records whatever a producer sends it. Type a meter name above to ask the log what it
-          holds for that one.
-        </Empty>
+        <Empty title={t("usage.meters.emptyTitle")}>{t("usage.meters.emptyBody")}</Empty>
       ) : null}
       {!windowError && window && shown.length > 0 ? (
         <Table>
           <Table.Header>
             <Table.Row>
-              <Table.HeaderCell>Meter</Table.HeaderCell>
-              <Table.HeaderCell>Quantity</Table.HeaderCell>
-              <Table.HeaderCell>Events</Table.HeaderCell>
-              <Table.HeaderCell>First</Table.HeaderCell>
-              <Table.HeaderCell>Last</Table.HeaderCell>
-              <Table.HeaderCell>Digest</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.common.meter")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.common.quantity")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.common.events")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.meters.columns.first")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.meters.columns.last")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.meters.columns.digest")}</Table.HeaderCell>
               <Table.HeaderCell />
             </Table.Row>
           </Table.Header>
@@ -129,6 +130,7 @@ const MeterRow = ({
   subject: string;
   window: UsageWindow;
 }) => {
+  const { t } = useTranslation();
   const { data, error, isLoading } = useRequest(
     () => getAggregate({ ...window, meter, subject: subject || null }),
     [meter, subject, window.from, window.to],
@@ -147,9 +149,9 @@ const MeterRow = ({
             {/* The message goes in a tooltip rather than the cell: an API error is
                 a sentence, the column is a number wide, and a clipped explanation
                 is worse than a word that promises one. */}
-            <Tooltip content={error ?? "Reading the log"}>
+            <Tooltip content={error ?? t("usage.common.readingTheLog")}>
               <Text as="span" className="text-ui-fg-muted" size="small">
-                {error ? "unavailable" : "..."}
+                {error ? t("usage.common.unavailable") : "..."}
               </Text>
             </Tooltip>
           </Table.Cell>
@@ -166,7 +168,7 @@ const MeterRow = ({
               // The distinction the whole screen turns on: nothing was recorded
               // here, which is not the same as nothing working.
               <Text className="text-ui-fg-muted" size="small">
-                none in this window
+                {t("usage.meters.noneInWindow")}
               </Text>
             ) : (
               formatQuantity(data.eventCount)
@@ -191,7 +193,7 @@ const MeterRow = ({
           size="small"
           variant="transparent"
         >
-          Events
+          {t("usage.common.events")}
         </Button>
       </Table.Cell>
     </Table.Row>

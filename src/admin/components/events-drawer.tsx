@@ -1,5 +1,6 @@
 import { Button, Drawer, Table, Text } from "@medusajs/ui";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { UsageEventRow, UsageWindow } from "../lib/api";
 import { listEvents } from "../lib/api";
 import { abbreviate, formatInstant, formatQuantity } from "../lib/format";
@@ -33,30 +34,51 @@ export const EventsDrawer = ({
   onClose: () => void;
   subject: string;
   window: UsageWindow | null;
-}) => (
-  <Drawer
-    onOpenChange={(open) => {
-      if (!open) {
-        onClose();
-      }
-    }}
-    open={meter !== null && window !== null}
-  >
-    <Drawer.Content>
-      <Drawer.Header>
-        <Drawer.Title>Events</Drawer.Title>
-        <Drawer.Description>
-          {meter}
-          {subject ? ` for ${subject}` : ", every subject"}, oldest first
-          {window ? `, from ${formatInstant(window.from)} up to ${formatInstant(window.to)}` : ""}.
-        </Drawer.Description>
-      </Drawer.Header>
-      <Drawer.Body className="overflow-y-auto">
-        {meter && window ? <Events meter={meter} subject={subject} window={window} /> : null}
-      </Drawer.Body>
-    </Drawer.Content>
-  </Drawer>
-);
+}) => {
+  const { t } = useTranslation();
+
+  // Four whole sentences rather than one assembled from four fragments. The old
+  // version concatenated " for X" and ", from A up to B" onto a bare meter name,
+  // which is untranslatable: Polish puts the subject in a different case and does
+  // not order the clauses the same way, so there is nothing for a translator to
+  // attach the fragments to.
+  const description = t(
+    subject
+      ? window
+        ? "usage.events.descriptionSubject"
+        : "usage.events.descriptionSubjectNoWindow"
+      : window
+        ? "usage.events.descriptionAll"
+        : "usage.events.descriptionAllNoWindow",
+    {
+      from: window ? formatInstant(window.from) : "",
+      meter,
+      subject,
+      to: window ? formatInstant(window.to) : "",
+    },
+  );
+
+  return (
+    <Drawer
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+      open={meter !== null && window !== null}
+    >
+      <Drawer.Content>
+        <Drawer.Header>
+          <Drawer.Title>{t("usage.events.title")}</Drawer.Title>
+          <Drawer.Description>{description}</Drawer.Description>
+        </Drawer.Header>
+        <Drawer.Body className="overflow-y-auto">
+          {meter && window ? <Events meter={meter} subject={subject} window={window} /> : null}
+        </Drawer.Body>
+      </Drawer.Content>
+    </Drawer>
+  );
+};
 
 const Events = ({
   meter,
@@ -67,6 +89,7 @@ const Events = ({
   subject: string;
   window: UsageWindow;
 }) => {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<UsageEventRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +121,7 @@ const Events = ({
       })
       .catch((failure: unknown) => {
         if (asked === generation.current) {
-          setError(messageOf(failure));
+          setError(messageOf(t, failure));
           setIsLoading(false);
         }
       });
@@ -122,7 +145,7 @@ const Events = ({
           // Deliberately not `error`: the pages already read are still the audit
           // trail, and replacing them with an alert would throw away the answer
           // to punish the request that failed to extend it.
-          setPagingError(messageOf(failure));
+          setPagingError(messageOf(t, failure));
           setIsLoading(false);
         }
       });
@@ -136,11 +159,7 @@ const Events = ({
   }
   if (rows.length === 0) {
     return (
-      <Empty title="No events in this window">
-        Nothing was recorded on this meter in the window named above. A meter that has never been
-        written to and a meter whose usage falls outside the window look the same from here, so
-        widening the window is the first thing to try.
-      </Empty>
+      <Empty title={t("usage.events.emptyTitle")}>{t("usage.events.emptyBody")}</Empty>
     );
   }
 
@@ -149,11 +168,11 @@ const Events = ({
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.HeaderCell>Occurred</Table.HeaderCell>
-            <Table.HeaderCell>Subject</Table.HeaderCell>
-            <Table.HeaderCell>Quantity</Table.HeaderCell>
-            <Table.HeaderCell>Source</Table.HeaderCell>
-            <Table.HeaderCell>Key</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.events.columns.occurred")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.subject")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.quantity")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.events.columns.source")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.events.columns.key")}</Table.HeaderCell>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -179,12 +198,14 @@ const Events = ({
       {pagingError ? <Failure message={pagingError} /> : null}
       <div className="flex items-center justify-between">
         <Text className="text-ui-fg-subtle" size="small">
-          {formatQuantity(rows.length)} shown
-          {cursor ? ", and there are more" : ", which is all of them"}.
+          {t(cursor ? "usage.events.shownMore" : "usage.events.shownAll", {
+            count: rows.length,
+            shown: formatQuantity(rows.length),
+          })}
         </Text>
         {cursor ? (
           <Button disabled={isLoading} onClick={loadMore} size="small" variant="secondary">
-            {pagingError ? "Try again" : "Load more"}
+            {pagingError ? t("usage.events.tryAgain") : t("usage.events.loadMore")}
           </Button>
         ) : null}
       </div>

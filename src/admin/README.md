@@ -1,6 +1,7 @@
 # Admin extensions
 
-One route: **Usage**, at `/app/usage`, with its own sidebar entry.
+One route: **Usage**, at `/app/usage`, with its own sidebar entry. English and
+Polish.
 
 The plugin shipped no admin UI in its first release, on the grounds that a screen
 which only rendered the endpoints of the day would have to be redesigned the moment
@@ -53,6 +54,8 @@ actually arrives with, and each one used to require a query against the sink.
 ## Layout
 
 ```
+i18n/         en.json and pl.json, and the index that registers them. Every
+              string on the screen comes from here.
 lib/          The API client and its wire types, formatting, window resolution,
               the verdicts that turn a response into the sentence the screen
               shows, and one request hook. `format`, `window` and `verdicts` are
@@ -68,6 +71,38 @@ testable without a browser and cannot quietly disagree with each other.
 `readClosability` reproduces the rule `assertClosable` enforces on the server, so
 the screen can explain why a period is not closable yet instead of offering a
 button that returns an error.
+
+## Translations
+
+`i18n/json/en.json` and `i18n/json/pl.json`, registered through `i18n/index.ts`
+under the default `translation` namespace with a `usage.` prefix. Nothing on the
+screen is a literal.
+
+Three things about them are load-bearing:
+
+- **The sidebar label is a key.** `defineRouteConfig` gets
+  `label: "usage.heading"` and `translationNs: "usage"`, which makes the dashboard
+  resolve it with `t(label, { ns: translationNs })` instead of printing it. There
+  is no namespace called `usage`; the dashboard initialises i18next with
+  `fallbackNS: "translation"`, so the prefixed key resolves through the default
+  namespace. The label and the page heading read the same key and cannot drift.
+- **Counts go through `count`, not through `+ "s"`.** English has two plural forms
+  and Polish has four, so `1`, `2` and `5` take three different endings. Any string
+  that carries a number has a `_one` / `_other` pair in `en.json` and a
+  `_one` / `_few` / `_many` / `_other` set in `pl.json`.
+- **Sentences are whole.** Nothing is assembled from fragments at the call site.
+  Where the English used to concatenate a clause - the events drawer's
+  description, the "held open for a further..." in `readClosability` - there are
+  now separate whole keys, because Polish puts the interpolated name in a
+  different case and does not order the clauses the same way.
+
+The pure functions in `lib/` take `t` as their first parameter rather than calling
+a hook, so they stay directly callable from a test. `messageOf` passes the API's
+own error text through untouched in both languages: it is the server's account of
+what happened, and this side cannot improve on it.
+
+The Polish is written as Polish, not as a translation of the English - the two are
+independent pieces of copy that happen to mean the same thing.
 
 ## Typechecking
 

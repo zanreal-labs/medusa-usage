@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import type { PeriodResult, PeriodVerification } from "../../lib/billing/result";
 import type { PeriodRow, UsageStatusResponse } from "./api";
 import { formatAmount, formatAmountDelta, formatDuration, formatInstant } from "./format";
@@ -17,6 +18,13 @@ import { formatAmount, formatAmountDelta, formatDuration, formatInstant } from "
  * already decided - `readClosability` in particular reproduces the rule
  * `assertClosable` enforces on the server, so the screen can explain why a period
  * cannot be closed yet instead of offering a button that returns an error.
+ *
+ * Every function takes `t` rather than building a sentence, because the sentence
+ * has to exist in English and in Polish and those are two pieces of copy, not one
+ * string and a lookup table. `t` is a parameter rather than a hook so these stay
+ * pure functions that a test can call directly. Counts are passed as `count` so
+ * i18next picks the plural form: English needs two, Polish needs four, and the
+ * `n === 1 ? "" : "s"` this used to do can only ever produce the English pair.
  */
 
 /** How loudly to say it. Maps onto the `StatusBadge` colours. */
@@ -43,49 +51,65 @@ export interface Verdict {
  * the deployment, and an empty buffer means nothing is waiting rather than that
  * nothing was recorded.
  */
-export function readIngestion(status: UsageStatusResponse): Verdict {
-  const waiting = `${status.buffered} event${status.buffered === 1 ? "" : "s"} waiting`;
-  const oldest = `oldest ${formatDuration(status.oldest_buffered_ms)}`;
-  const instance = "These counts are for the instance that served this request, not the deployment.";
+export function readIngestion(t: TFunction, status: UsageStatusResponse): Verdict {
+  const key = (name: string): string => `usage.verdicts.ingestion.${name}`;
 
   if (status.last_flush_error) {
     return {
-      detail: `The "${status.sink}" sink said: ${status.last_flush_error}. ${waiting}. Until a flush succeeds, usage is only in memory.`,
-      headline: "The last flush failed",
+      detail: t(key("flushFailed"), {
+        count: status.buffered,
+        error: status.last_flush_error,
+        sink: status.sink,
+      }),
+      headline: t(key("flushFailedHeadline")),
       tone: "red",
     };
   }
   if (status.flush_mode === "immediate") {
     return {
-      detail: `Every event is written to the "${status.sink}" sink as it arrives, so nothing buffers and there is no flush to be behind on.`,
-      headline: "Writing each event as it arrives",
+      detail: t(key("immediateDetail"), { sink: status.sink }),
+      headline: t(key("immediateHeadline")),
       tone: "green",
     };
   }
   if (status.buffered > 0 && !status.last_flush_at) {
     return {
-      detail: `${waiting}, ${oldest}, and nothing has been flushed to "${status.sink}" yet. Flushes run every ${formatDuration(status.flush_interval_ms)}, or sooner at ${status.batch_size} events. ${instance}`,
-      headline: "Buffering, nothing written yet",
+      detail: t(key("neverFlushed"), {
+        batchSize: status.batch_size,
+        count: status.buffered,
+        interval: formatDuration(status.flush_interval_ms),
+        oldest: formatDuration(status.oldest_buffered_ms),
+        sink: status.sink,
+      }),
+      headline: t(key("neverFlushedHeadline")),
       tone: "orange",
     };
   }
   if (status.buffered > 0) {
     return {
-      detail: `${waiting}, ${oldest}. Last flush to "${status.sink}" at ${formatInstant(status.last_flush_at)}. ${instance}`,
-      headline: "Recording",
+      detail: t(key("recordingBuffered"), {
+        count: status.buffered,
+        lastFlush: formatInstant(status.last_flush_at),
+        oldest: formatDuration(status.oldest_buffered_ms),
+        sink: status.sink,
+      }),
+      headline: t(key("recordingHeadline")),
       tone: "green",
     };
   }
   if (status.last_flush_at) {
     return {
-      detail: `Nothing waiting. The last flush to "${status.sink}" was at ${formatInstant(status.last_flush_at)}. ${instance}`,
-      headline: "Recording",
+      detail: t(key("recordingIdleDetail"), {
+        lastFlush: formatInstant(status.last_flush_at),
+        sink: status.sink,
+      }),
+      headline: t(key("recordingHeadline")),
       tone: "green",
     };
   }
   return {
-    detail: `Nothing is buffered and this instance has not flushed anything. That is what a healthy plugin with no producer looks like, and also what a broken producer looks like. ${instance}`,
-    headline: "Nothing has arrived yet",
+    detail: t(key("idleDetail")),
+    headline: t(key("idleHeadline")),
     tone: "grey",
   };
 }
@@ -98,19 +122,22 @@ export function readIngestion(status: UsageStatusResponse): Verdict {
  * A missing rate card is not a fault: metering without pricing is a supported way
  * to run this plugin.
  */
-export function readRateCard(status: UsageStatusResponse): Verdict {
+export function readRateCard(t: TFunction, status: UsageStatusResponse): Verdict {
   if (!status.rates) {
     return {
-      detail:
-        "No rate card is configured, so this installation meters without pricing. Periods can be opened and read, but not closed.",
-      headline: "Metering only",
+      detail: t("usage.verdicts.rateCard.meteringOnlyDetail"),
+      headline: t("usage.verdicts.rateCard.meteringOnlyHeadline"),
       tone: "grey",
     };
   }
   const { closeDelayMs, currency, meters } = status.rates;
   return {
-    detail: `${meters.length} meter${meters.length === 1 ? "" : "s"} priced in ${currency}. A period is held open for ${formatDuration(closeDelayMs)} after it ends before it can be closed.`,
-    headline: "Rated",
+    detail: t("usage.verdicts.rateCard.rated", {
+      count: meters.length,
+      currency,
+      delay: formatDuration(closeDelayMs),
+    }),
+    headline: t("usage.verdicts.rateCard.ratedHeadline"),
     tone: "green",
   };
 }
@@ -147,6 +174,7 @@ export interface Closability {
  * rule rather than replacing it.
  */
 export function readClosability(
+  t: TFunction,
   period: PeriodRow,
   /** `undefined` while the status is still being read; `null` when there is none. */
   rates: UsageStatusResponse["rates"] | undefined,
@@ -155,38 +183,50 @@ export function readClosability(
   if (period.closed_at) {
     return {
       closableAt: null,
-      reason: `Closed at ${formatInstant(period.closed_at)}. The frozen result is what was billed, and closing again would return it unchanged rather than bill twice.`,
+      reason: t("usage.verdicts.closability.closed", {
+        closedAt: formatInstant(period.closed_at),
+      }),
       state: "closed",
     };
   }
   if (rates === undefined) {
     return {
       closableAt: null,
-      reason: "Still reading the rate card, so whether this period can be closed is not known yet.",
+      reason: t("usage.verdicts.closability.unknown"),
       state: "unknown",
     };
   }
   if (!rates) {
     return {
       closableAt: null,
-      reason:
-        "There is no rate card, so there is nothing to rate this period against. Configure `billing` in the plugin options before closing it.",
+      reason: t("usage.verdicts.closability.noRateCard"),
       state: "no-rate-card",
     };
   }
 
   const closableAt = new Date(new Date(period.ends_at).getTime() + rates.closeDelayMs);
   if (now.getTime() < closableAt.getTime()) {
+    // Two whole sentences rather than one with an optional clause spliced into
+    // it: a hold of zero is a different statement, and in Polish the clause
+    // cannot be appended to the first one unchanged.
     return {
       closableAt: closableAt.toISOString(),
-      reason: `Not closable until ${formatInstant(closableAt.toISOString())}. The window ends at ${formatInstant(period.ends_at)}${rates.closeDelayMs > 0 ? `, and it is held open for a further ${formatDuration(rates.closeDelayMs)} so events still in a buffer can land` : ""}.`,
+      reason: t(
+        rates.closeDelayMs > 0
+          ? "usage.verdicts.closability.tooEarlyWithHold"
+          : "usage.verdicts.closability.tooEarly",
+        {
+          closableAt: formatInstant(closableAt.toISOString()),
+          delay: formatDuration(rates.closeDelayMs),
+          endsAt: formatInstant(period.ends_at),
+        },
+      ),
       state: "too-early",
     };
   }
   return {
     closableAt: closableAt.toISOString(),
-    reason:
-      "The window is over. Closing rates it against the rate card and freezes the answer; it is safe to retry and cannot bill twice.",
+    reason: t("usage.verdicts.closability.closable"),
     state: "closable",
   };
 }
@@ -199,20 +239,22 @@ export function readClosability(
  * frozen, and the frozen result stays exactly as it was either way.
  */
 export function readVerification(
+  t: TFunction,
   verification: PeriodVerification,
   result: PeriodResult,
 ): Verdict {
   if (verification.matches) {
     return {
-      detail: `Rated again from the log, this period still comes to ${formatAmount(verification.storedTotal, result.currency)} and the same digest. The evidence behind the invoice has not moved.`,
-      headline: "Verifies",
+      detail: t("usage.verdicts.verification.matchesDetail", {
+        total: formatAmount(verification.storedTotal, result.currency),
+      }),
+      headline: t("usage.verdicts.verification.matchesHeadline"),
       tone: "green",
     };
   }
   const moved = verification.lines.filter(
     (line) => line.quantityDelta !== 0 || line.amountDelta !== 0,
   );
-  const unchanged = "The frozen result has not been rewritten, and will not be.";
 
   // A digest covers the evidence, not just the money: the first and last instants
   // on each line and the digest of the snapshot it was rated from are inside it.
@@ -221,14 +263,22 @@ export function readVerification(
   // differ" and stopping there would look like a bug in this screen.
   if (moved.length === 0) {
     return {
-      detail: `No meter's quantity or amount has moved, and the digest still differs. A digest covers the evidence and not only the total: the instants a line spans, and the snapshot it was rated from, are inside it. Events that cancel out, or arrive with a quantity of zero, look exactly like this. ${unchanged}`,
-      headline: "Does not verify",
+      detail: t("usage.verdicts.verification.noneMovedDetail"),
+      headline: t("usage.verdicts.verification.differsHeadline"),
       tone: "orange",
     };
   }
   return {
-    detail: `${moved.length} of ${verification.lines.length} meter${verification.lines.length === 1 ? "" : "s"} differ. The log now totals ${formatAmount(verification.recomputedTotal, result.currency)} against the ${formatAmount(verification.storedTotal, result.currency)} that was billed, a difference of ${formatAmountDelta(verification.totalDelta, result.currency)}. ${unchanged}`,
-    headline: "Does not verify",
+    // `count` is the number of lines, because that is the noun the plural agrees
+    // with; `moved` rides along as plain interpolation.
+    detail: t("usage.verdicts.verification.differ", {
+      count: verification.lines.length,
+      delta: formatAmountDelta(verification.totalDelta, result.currency),
+      moved: moved.length,
+      recomputed: formatAmount(verification.recomputedTotal, result.currency),
+      stored: formatAmount(verification.storedTotal, result.currency),
+    }),
+    headline: t("usage.verdicts.verification.differsHeadline"),
     tone: "orange",
   };
 }

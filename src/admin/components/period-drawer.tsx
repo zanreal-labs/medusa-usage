@@ -1,5 +1,6 @@
 import { Button, Drawer, Table, Text, Tooltip, usePrompt } from "@medusajs/ui";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { PeriodResult, PeriodVerification } from "../../lib/billing/result";
 import type { PeriodRow, UsageStatusResponse, UsageWindow } from "../lib/api";
 import { closePeriod, getAggregate, getPeriod, verifyPeriod } from "../lib/api";
@@ -35,26 +36,30 @@ export const PeriodDrawer = ({
   periodId: string | null;
   /** The whole request: an unread rate card and an unreadable one differ. */
   status: Request<UsageStatusResponse>;
-}) => (
-  <Drawer
-    onOpenChange={(open) => {
-      if (!open) {
-        onClose();
-      }
-    }}
-    open={periodId !== null}
-  >
-    <Drawer.Content>
-      <Drawer.Header>
-        <Drawer.Title>Billing period</Drawer.Title>
-        <Drawer.Description>{periodId ?? ""}</Drawer.Description>
-      </Drawer.Header>
-      <Drawer.Body className="overflow-y-auto">
-        {periodId ? <Detail onClosed={onClosed} periodId={periodId} status={status} /> : null}
-      </Drawer.Body>
-    </Drawer.Content>
-  </Drawer>
-);
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <Drawer
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+      open={periodId !== null}
+    >
+      <Drawer.Content>
+        <Drawer.Header>
+          <Drawer.Title>{t("usage.period.title")}</Drawer.Title>
+          <Drawer.Description>{periodId ?? ""}</Drawer.Description>
+        </Drawer.Header>
+        <Drawer.Body className="overflow-y-auto">
+          {periodId ? <Detail onClosed={onClosed} periodId={periodId} status={status} /> : null}
+        </Drawer.Body>
+      </Drawer.Content>
+    </Drawer>
+  );
+};
 
 const Detail = ({
   onClosed,
@@ -65,6 +70,7 @@ const Detail = ({
   periodId: string;
   status: Request<UsageStatusResponse>;
 }) => {
+  const { t } = useTranslation();
   const prompt = usePrompt();
   const request = useRequest(() => getPeriod(periodId), [periodId]);
   const [action, setAction] = useState<{ error: string | null; isBusy: boolean }>({
@@ -81,14 +87,18 @@ const Detail = ({
   }
 
   const { period, result } = request.data;
-  const closability = readClosability(period, status.data?.rates, new Date());
+  const closability = readClosability(t, period, status.data?.rates, new Date());
 
   const close = async () => {
     const confirmed = await prompt({
-      cancelText: "Cancel",
-      confirmText: "Close period",
-      description: `This rates ${period.subject} over ${formatInstant(period.starts_at)} to ${formatInstant(period.ends_at)} against the current rate card and freezes the answer. It is safe to retry and cannot bill the same period twice, but the frozen result does not move afterwards.`,
-      title: "Close this period?",
+      cancelText: t("usage.period.confirm.cancel"),
+      confirmText: t("usage.period.confirm.confirm"),
+      description: t("usage.period.confirm.description", {
+        from: formatInstant(period.starts_at),
+        subject: period.subject,
+        to: formatInstant(period.ends_at),
+      }),
+      title: t("usage.period.confirm.title"),
       variant: "confirmation",
     });
     if (!confirmed) {
@@ -103,7 +113,7 @@ const Detail = ({
       request.reload();
       onClosed();
     } catch (failure: unknown) {
-      setAction({ error: messageOf(failure), isBusy: false });
+      setAction({ error: messageOf(t, failure), isBusy: false });
     }
   };
 
@@ -113,25 +123,27 @@ const Detail = ({
       setVerification(await verifyPeriod(period.id));
       setAction({ error: null, isBusy: false });
     } catch (failure: unknown) {
-      setAction({ error: messageOf(failure), isBusy: false });
+      setAction({ error: messageOf(t, failure), isBusy: false });
     }
   };
 
   return (
     <div className="flex flex-col gap-y-6">
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Subject" mono>
+        <Field label={t("usage.common.subject")} mono>
           {period.subject}
         </Field>
-        <Field label="Opened">{formatInstant(period.created_at)}</Field>
-        <Field label="Window starts">{formatInstant(period.starts_at)}</Field>
-        <Field label="Window ends, exclusive">{formatInstant(period.ends_at)}</Field>
+        <Field label={t("usage.period.fields.opened")}>{formatInstant(period.created_at)}</Field>
+        <Field label={t("usage.period.fields.windowStarts")}>
+          {formatInstant(period.starts_at)}
+        </Field>
+        <Field label={t("usage.period.fields.windowEnds")}>{formatInstant(period.ends_at)}</Field>
       </div>
 
       <div className="flex flex-col gap-y-2">
         <Text className="text-ui-fg-subtle" size="small">
           {closability.state === "unknown" && status.error
-            ? `Whether this period can be closed is not known: reading the plugin's status failed. ${status.error}`
+            ? t("usage.period.statusUnknown", { error: status.error })
             : closability.reason}
         </Text>
         {action.error ? <Failure message={action.error} /> : null}
@@ -143,7 +155,7 @@ const Detail = ({
             }}
             size="small"
           >
-            Close period
+            {t("usage.period.close")}
           </Button>
           <Button
             disabled={action.isBusy || !result}
@@ -153,7 +165,7 @@ const Detail = ({
             size="small"
             variant="secondary"
           >
-            Verify
+            {t("usage.period.verify")}
           </Button>
         </div>
       </div>
@@ -162,11 +174,7 @@ const Detail = ({
         <Result result={result} />
       ) : (
         <>
-          <Empty title="No frozen result">
-            This period is open, which means it has not been billed. That is a different thing from
-            a result whose total is zero: an open period says do not bill this yet, while a closed
-            one worth nothing says it provably came to nothing.
-          </Empty>
+          <Empty title={t("usage.period.noResultTitle")}>{t("usage.period.noResultBody")}</Empty>
           <Accrued period={period} rates={status.data?.rates} />
         </>
       )}
@@ -178,76 +186,26 @@ const Detail = ({
   );
 };
 
-const Result = ({ result }: { result: PeriodResult }) => (
-  <div className="flex flex-col gap-y-3">
-    <Text size="small" weight="plus">
-      Frozen result
-    </Text>
-    <Table>
-      <Table.Header>
-        <Table.Row>
-          <Table.HeaderCell>Meter</Table.HeaderCell>
-          <Table.HeaderCell>Quantity</Table.HeaderCell>
-          <Table.HeaderCell>Charged for</Table.HeaderCell>
-          <Table.HeaderCell>Events</Table.HeaderCell>
-          <Table.HeaderCell>Amount</Table.HeaderCell>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {result.lines.map((line) => (
-          <Table.Row key={line.meter}>
-            <Table.Cell>
-              <Text as="span" family="mono" size="small">
-                {line.meter}
-              </Text>
-            </Table.Cell>
-            <Table.Cell>{formatQuantity(line.quantity)}</Table.Cell>
-            <Table.Cell>{formatQuantity(line.chargeableQuantity)}</Table.Cell>
-            <Table.Cell>{formatQuantity(line.eventCount)}</Table.Cell>
-            <Table.Cell>{formatAmount(line.amount, result.currency)}</Table.Cell>
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table>
-    <div className="grid grid-cols-2 gap-4">
-      <Field label="Total">{formatAmount(result.total, result.currency)}</Field>
-      <Field label="Events behind it">{formatQuantity(result.eventCount)}</Field>
-      <Field label="Closed">{formatInstant(result.closedAt)}</Field>
-      <Field label="Rated from sink">{result.sink}</Field>
-      <Field label="Digest" mono>
-        {result.digest}
-      </Field>
-    </div>
-  </div>
-);
+const Result = ({ result }: { result: PeriodResult }) => {
+  const { t } = useTranslation();
 
-const Verification = ({
-  result,
-  verification,
-}: {
-  result: PeriodResult;
-  verification: PeriodVerification;
-}) => (
-  <div className="flex flex-col gap-y-3">
-    <Text size="small" weight="plus">
-      Re-derived from the log
-    </Text>
-    <div className="-mx-6 border-t">
-      <VerdictLine verdict={readVerification(verification, result)} />
-    </div>
-    {verification.matches ? null : (
+  return (
+    <div className="flex flex-col gap-y-3">
+      <Text size="small" weight="plus">
+        {t("usage.period.result.heading")}
+      </Text>
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.HeaderCell>Meter</Table.HeaderCell>
-            <Table.HeaderCell>Billed</Table.HeaderCell>
-            <Table.HeaderCell>Now</Table.HeaderCell>
-            <Table.HeaderCell>Quantity delta</Table.HeaderCell>
-            <Table.HeaderCell>Amount delta</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.meter")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.quantity")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.period.result.chargedFor")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.events")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.amount")}</Table.HeaderCell>
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {verification.lines.map((line) => (
+          {result.lines.map((line) => (
             <Table.Row key={line.meter}>
               <Table.Cell>
                 <Text as="span" family="mono" size="small">
@@ -255,16 +213,78 @@ const Verification = ({
                 </Text>
               </Table.Cell>
               <Table.Cell>{formatQuantity(line.quantity)}</Table.Cell>
-              <Table.Cell>{formatQuantity(line.currentQuantity)}</Table.Cell>
-              <Table.Cell>{formatDelta(line.quantityDelta)}</Table.Cell>
-              <Table.Cell>{formatAmountDelta(line.amountDelta, result.currency)}</Table.Cell>
+              <Table.Cell>{formatQuantity(line.chargeableQuantity)}</Table.Cell>
+              <Table.Cell>{formatQuantity(line.eventCount)}</Table.Cell>
+              <Table.Cell>{formatAmount(line.amount, result.currency)}</Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
       </Table>
-    )}
-  </div>
-);
+      <div className="grid grid-cols-2 gap-4">
+        <Field label={t("usage.period.result.total")}>
+          {formatAmount(result.total, result.currency)}
+        </Field>
+        <Field label={t("usage.period.result.eventsBehind")}>
+          {formatQuantity(result.eventCount)}
+        </Field>
+        <Field label={t("usage.period.result.closed")}>{formatInstant(result.closedAt)}</Field>
+        <Field label={t("usage.period.result.ratedFromSink")}>{result.sink}</Field>
+        <Field label={t("usage.period.result.digest")} mono>
+          {result.digest}
+        </Field>
+      </div>
+    </div>
+  );
+};
+
+const Verification = ({
+  result,
+  verification,
+}: {
+  result: PeriodResult;
+  verification: PeriodVerification;
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <div className="flex flex-col gap-y-3">
+      <Text size="small" weight="plus">
+        {t("usage.period.verification.heading")}
+      </Text>
+      <div className="-mx-6 border-t">
+        <VerdictLine verdict={readVerification(t, verification, result)} />
+      </div>
+      {verification.matches ? null : (
+        <Table>
+          <Table.Header>
+            <Table.Row>
+              <Table.HeaderCell>{t("usage.common.meter")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.period.verification.billed")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.period.verification.now")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.period.verification.quantityDelta")}</Table.HeaderCell>
+              <Table.HeaderCell>{t("usage.period.verification.amountDelta")}</Table.HeaderCell>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {verification.lines.map((line) => (
+              <Table.Row key={line.meter}>
+                <Table.Cell>
+                  <Text as="span" family="mono" size="small">
+                    {line.meter}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell>{formatQuantity(line.quantity)}</Table.Cell>
+                <Table.Cell>{formatQuantity(line.currentQuantity)}</Table.Cell>
+                <Table.Cell>{formatDelta(line.quantityDelta)}</Table.Cell>
+                <Table.Cell>{formatAmountDelta(line.amountDelta, result.currency)}</Table.Cell>
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table>
+      )}
+    </div>
+  );
+};
 
 /**
  * What an open period has accrued so far.
@@ -286,6 +306,7 @@ const Accrued = ({
   period: PeriodRow;
   rates: UsageStatusResponse["rates"] | undefined;
 }) => {
+  const { t } = useTranslation();
   const meters = rates?.meters ?? [];
   if (meters.length === 0) {
     return null;
@@ -294,14 +315,14 @@ const Accrued = ({
   return (
     <div className="flex flex-col gap-y-3">
       <Text size="small" weight="plus">
-        Accrued so far, over this period's own boundaries
+        {t("usage.period.accrued.heading")}
       </Text>
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.HeaderCell>Meter</Table.HeaderCell>
-            <Table.HeaderCell>Quantity</Table.HeaderCell>
-            <Table.HeaderCell>Events</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.meter")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.quantity")}</Table.HeaderCell>
+            <Table.HeaderCell>{t("usage.common.events")}</Table.HeaderCell>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -328,6 +349,7 @@ const AccruedRow = ({
   subject: string;
   window: UsageWindow;
 }) => {
+  const { t } = useTranslation();
   const { data, error } = useRequest(
     () => getAggregate({ ...window, meter, subject }),
     [meter, subject, window.from, window.to],
@@ -344,9 +366,9 @@ const AccruedRow = ({
         {data ? (
           formatQuantity(data.total)
         ) : (
-          <Tooltip content={error ?? "Reading the log"}>
+          <Tooltip content={error ?? t("usage.common.readingTheLog")}>
             <Text as="span" className="text-ui-fg-muted" size="small">
-              {error ? "unavailable" : "..."}
+              {error ? t("usage.common.unavailable") : "..."}
             </Text>
           </Tooltip>
         )}
