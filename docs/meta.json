@@ -1,5 +1,5 @@
 {
-  "title": "@zanreal/medusa-usage",
-  "description": "Metered usage for Medusa v2: an append-only event log, deterministic deduplication, billing periods and rating.",
+  "title": "Usage",
+  "description": "@zanreal/medusa-usage is metered usage for Medusa v2: an append-only event log, deterministic deduplication, billing periods and rating.",
   "pages": ["index", "recording", "deduplication", "billing", "sinks"]
 }
