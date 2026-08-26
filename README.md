@@ -4,6 +4,9 @@ Metered usage for Medusa v2: an append-only usage event log, batched ingestion,
 deterministic deduplication, billing periods, rating, and a frozen result you can
 re-derive a year later.
 
+Full documentation, in English and Polish, is published at
+<https://zanreal.com/docs/oss/medusa-usage> and authored in [`docs/`](./docs).
+
 Medusa has no metering. Its
 [subscriptions recipe](https://docs.medusajs.com/resources/recipes/subscriptions)
 covers fixed-interval subscriptions and says nothing about usage, and there is
