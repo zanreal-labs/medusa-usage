@@ -1,11 +1,12 @@
 {
   "name": "@zanreal/medusa-usage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Medusa v2 plugin for metered usage: an append-only usage event log with pluggable event sinks, batched ingestion, deterministic deduplication and re-derivable aggregation.",
   "keywords": [
     "medusa",
     "medusa-plugin",
     "medusa-plugin-integration",
+    "medusa-plugin-other",
     "medusa-v2",
     "metering",
     "plugin",
@@ -27,7 +28,8 @@
     "provenance": true
   },
   "files": [
-    ".medusa/server"
+    ".medusa/server",
+    "CHANGELOG.md"
   ],
   "exports": {
     "./package.json": "./package.json",
