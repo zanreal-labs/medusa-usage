@@ -9,7 +9,19 @@ registry, not merge dates on `main` - see [Releasing](./README.md#releasing).
 
 ## [Unreleased]
 
-Nothing yet. `main` is at the published version.
+Nothing yet.
+
+## [0.1.1] - 2026-09-08
+
+### Changed
+
+- Keywords carry a category word, so the package is eligible for the Medusa
+  integrations directory at <https://medusajs.com/integrations>, which is scraped
+  from npm. Without it the package could not be picked up at all.
+
+### Added
+
+- This changelog, shipped in the published tarball.
 
 ## [0.1.0] - 2026-08-26
 
@@ -28,5 +40,6 @@ First public release. MIT, published from CI with npm provenance.
 - **Admin usage screen**, in English and Polish.
 - Builds on `prepare`, so a git dependency resolves without a manual build step.
 
-[Unreleased]: https://github.com/zanreal-labs/medusa-usage/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zanreal-labs/medusa-usage/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/zanreal-labs/medusa-usage/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zanreal-labs/medusa-usage/releases/tag/v0.1.0
