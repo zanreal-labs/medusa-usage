@@ -6,6 +6,7 @@
     "medusa",
     "medusa-plugin",
     "medusa-plugin-integration",
+    "medusa-plugin-other",
     "medusa-v2",
     "metering",
     "plugin",
@@ -27,7 +28,8 @@
     "provenance": true
   },
   "files": [
-    ".medusa/server"
+    ".medusa/server",
+    "CHANGELOG.md"
   ],
   "exports": {
     "./package.json": "./package.json",
