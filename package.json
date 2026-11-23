@@ -82,7 +82,7 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "vite": "^8.3.8",
-    "vitest": "^3.2.7"
+    "vitest": "^4.0.0"
   },
   "peerDependencies": {
     "@medusajs/cli": "2.23.0",
